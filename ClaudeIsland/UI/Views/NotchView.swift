@@ -163,7 +163,8 @@ struct NotchView: View {
                     )
                     .frame(
                         maxWidth: viewModel.status == .opened ? notchSize.width : nil,
-                        maxHeight: viewModel.status == .opened ? notchSize.height : nil
+                        maxHeight: viewModel.status == .opened ? notchSize.height : nil,
+                        alignment: .top
                     )
                     .animation(viewModel.status == .opened ? openAnimation : closeAnimation, value: viewModel.status)
                     .animation(openAnimation, value: notchSize) // Animate container size changes between content types
