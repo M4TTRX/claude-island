@@ -641,10 +641,10 @@ struct ChatView: View {
     private func focusTerminal() {
         Task {
             if let pid = session.pid {
-                _ = await YabaiController.shared.focusWindow(forClaudePID: pid)
-            } else {
-                _ = await YabaiController.shared.focusWindow(forWorkingDirectory: self.session.cwd)
+                let success = await TerminalFocuser.shared.focusTerminal(forClaudePID: pid)
+                if success { return }
             }
+            _ = await TerminalFocuser.shared.focusTerminal(forWorkingDirectory: self.session.cwd)
         }
     }
 
