@@ -38,13 +38,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         self.windowManager?.windowController
     }
 
+    /// Cancel any in-flight hook installation task
+    /// Called by NotchMenuView when user toggles hooks off to prevent race conditions
+    func cancelHookInstallTask() {
+        self.hookInstallTask?.cancel()
+        self.hookInstallTask = nil
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         if !self.ensureSingleInstance() {
             NSApplication.shared.terminate(nil)
             return
         }
 
-        HookInstaller.installIfNeeded()
+        self.hookInstallTask = Task {
+            await HookInstaller.installIfNeeded()
+        }
         NSApplication.shared.setActivationPolicy(.accessory)
 
         self.windowManager = WindowManager()
@@ -65,6 +74,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        // Cancel any in-flight hook installation
+        self.hookInstallTask?.cancel()
+
         // Stop socket server and clean up socket file
         HookSocketServer.shared.stop()
 
@@ -80,6 +92,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var windowManager: WindowManager?
     private var screenObserver: ScreenObserver?
     private var updateCheckTimer: Timer?
+    private var hookInstallTask: Task<Void, Never>?
 
     private let userDriver: NotchUserDriver
 

@@ -13,16 +13,27 @@ private let logger = Logger(subsystem: "com.engels74.ClaudeIsland", category: "H
 
 // MARK: - HookInstaller
 
+/// Hook installer with @MainActor isolation to protect static mutable state
+/// This ensures thread-safe access to detectedRuntime across all call sites
+@MainActor
 enum HookInstaller {
     // MARK: Internal
 
+    /// Cached detected runtime for command generation
+    /// Protected by @MainActor isolation to prevent data races
+    private(set) static var detectedRuntime: PythonRuntimeDetector.PythonRuntime?
+
     /// Install hook script and update settings.json on app launch
-    static func installIfNeeded() {
+    /// Supports cooperative cancellation - checks Task.isCancelled at key points
+    static func installIfNeeded() async {
         let claudeDir = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".claude")
         let hooksDir = claudeDir.appendingPathComponent("hooks")
         let pythonScript = hooksDir.appendingPathComponent("claude-island-state.py")
         let settings = claudeDir.appendingPathComponent("settings.json")
+
+        // Check for cancellation before file operations
+        guard !Task.isCancelled else { return }
 
         try? FileManager.default.createDirectory(
             at: hooksDir,
@@ -38,7 +49,19 @@ enum HookInstaller {
             )
         }
 
-        self.checkUvAvailability()
+        // Check for cancellation before async runtime detection
+        guard !Task.isCancelled else { return }
+
+        await self.detectPythonRuntime()
+
+        // Check for cancellation after async operation (state may have changed)
+        guard !Task.isCancelled else { return }
+
+        // Skip settings update if no runtime available (alert was already shown during detection)
+        // Use ? suffix for optional pattern matching (required to match .some(.unavailable(...)))
+        if case .unavailable? = self.detectedRuntime {
+            return
+        }
         self.updateSettings(at: settings)
     }
 
@@ -57,15 +80,9 @@ enum HookInstaller {
 
         for (_, value) in hooks {
             if let entries = value as? [[String: Any]] {
-                for entry in entries {
-                    if let entryHooks = entry["hooks"] as? [[String: Any]] {
-                        for hook in entryHooks {
-                            if let cmd = hook["command"] as? String,
-                               cmd.contains("claude-island-state.py") {
-                                return true
-                            }
-                        }
-                    }
+                // Check both modern wrapped format and legacy direct format
+                for entry in entries where self.containsClaudeIslandCommand(entry) {
+                    return true
                 }
             }
         }
@@ -91,14 +108,9 @@ enum HookInstaller {
 
         for (event, value) in hooks {
             if var entries = value as? [[String: Any]] {
+                // Remove both modern wrapped format and legacy direct format entries
                 entries.removeAll { entry in
-                    if let entryHooks = entry["hooks"] as? [[String: Any]] {
-                        return entryHooks.contains { hook in
-                            let cmd = hook["command"] as? String ?? ""
-                            return cmd.contains("claude-island-state.py")
-                        }
-                    }
-                    return false
+                    self.containsClaudeIslandCommand(entry)
                 }
 
                 if entries.isEmpty {
@@ -125,44 +137,56 @@ enum HookInstaller {
 
     // MARK: Private
 
-    /// Check if uv is available on PATH
-    /// Logs a warning if uv is not found, as hooks require uv to execute
-    private static func checkUvAvailability() {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/which")
-        process.arguments = ["uv"]
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
+    /// Detect the best available Python runtime
+    private static func detectPythonRuntime() async {
+        self.detectedRuntime = await PythonRuntimeDetector.shared.detectRuntime()
 
-        do {
-            try process.run()
-            process.waitUntilExit()
-            if process.terminationStatus != 0 {
-                logger.warning(
-                    """
-                    uv not found on PATH. Claude Island hooks require uv to execute. \
-                    Install uv from https://docs.astral.sh/uv/getting-started/installation/
-                    """
-                )
-            }
-        } catch {
-            logger.warning(
-                """
-                Failed to check for uv availability: \(error.localizedDescription). \
-                Claude Island hooks require uv to execute.
-                """
-            )
+        // Already on MainActor, can call directly without wrapper
+        // Use ? suffix for optional pattern matching (required to match .some(.unavailable(...)))
+        if case let .unavailable(reason)? = detectedRuntime {
+            PythonRuntimeAlert.showUnavailableAlert(reason: reason)
         }
     }
 
     private static func updateSettings(at settingsURL: URL) {
+        guard let runtime = detectedRuntime,
+              let command = PythonRuntimeDetector.shared.getCommand(
+                  for: "~/.claude/hooks/claude-island-state.py",
+                  runtime: runtime
+              )
+        else {
+            logger.warning("Skipping hook settings update - no suitable Python runtime")
+            return
+        }
+
+        logger.info("Using hook command: \(command)")
+
         var json: [String: Any] = [:]
         if let data = try? Data(contentsOf: settingsURL),
            let existing = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             json = existing
         }
 
-        let command = "uv run ~/.claude/hooks/claude-island-state.py"
+        var hooks = json["hooks"] as? [String: Any] ?? [:]
+        let hookEvents = self.buildHookConfigurations(command: command)
+
+        for (event, config) in hookEvents {
+            hooks[event] = self.updateOrAddHookEntries(
+                existing: hooks[event] as? [[String: Any]],
+                config: config,
+                command: command
+            )
+        }
+
+        json["hooks"] = hooks
+
+        if let data = try? JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys]) {
+            try? data.write(to: settingsURL)
+        }
+    }
+
+    /// Build hook configurations for all events
+    private static func buildHookConfigurations(command: String) -> [(String, [[String: Any]])] {
         let hookEntry: [[String: Any]] = [["type": "command", "command": command]]
         let hookEntryWithTimeout: [[String: Any]] = [["type": "command", "command": command, "timeout": 86400]]
         let withMatcher: [[String: Any]] = [["matcher": "*", "hooks": hookEntry]]
@@ -173,9 +197,7 @@ enum HookInstaller {
             ["matcher": "manual", "hooks": hookEntry],
         ]
 
-        var hooks = json["hooks"] as? [String: Any] ?? [:]
-
-        let hookEvents: [(String, [[String: Any]])] = [
+        return [
             ("UserPromptSubmit", withoutMatcher),
             ("PreToolUse", withMatcher),
             ("PostToolUse", withMatcher),
@@ -187,34 +209,77 @@ enum HookInstaller {
             ("SessionEnd", withoutMatcher),
             ("PreCompact", preCompactConfig),
         ]
+    }
 
-        for (event, config) in hookEvents {
-            if var existingEvent = hooks[event] as? [[String: Any]] {
-                let hasOurHook = existingEvent.contains { entry in
-                    if let entryHooks = entry["hooks"] as? [[String: Any]] {
-                        return entryHooks.contains { hookEntry in
-                            let cmd = hookEntry["command"] as? String ?? ""
-                            return cmd.contains("claude-island-state.py")
-                        }
+    /// Update existing hook entries or add new ones
+    private static func updateOrAddHookEntries(
+        existing: [[String: Any]]?,
+        config: [[String: Any]],
+        command: String
+    ) -> [[String: Any]] {
+        guard var existingEvent = existing else {
+            return config
+        }
+
+        // First, remove any legacy direct format entries (not wrapped in "hooks")
+        existingEvent.removeAll { entry in
+            self.isLegacyDirectEntry(entry)
+        }
+
+        var updated = false
+        for i in existingEvent.indices {
+            if var entry = existingEvent[i] as? [String: Any],
+               var entryHooks = entry["hooks"] as? [[String: Any]] {
+                for j in entryHooks.indices {
+                    if var hook = entryHooks[j] as? [String: Any],
+                       let cmd = hook["command"] as? String,
+                       cmd.contains("claude-island-state.py") {
+                        hook["command"] = command
+                        entryHooks[j] = hook
+                        updated = true
                     }
-                    return false
                 }
-                if !hasOurHook {
-                    existingEvent.append(contentsOf: config)
-                    hooks[event] = existingEvent
-                }
-            } else {
-                hooks[event] = config
+                entry["hooks"] = entryHooks
+                existingEvent[i] = entry
             }
         }
 
-        json["hooks"] = hooks
-
-        if let data = try? JSONSerialization.data(
-            withJSONObject: json,
-            options: [.prettyPrinted, .sortedKeys]
-        ) {
-            try? data.write(to: settingsURL)
+        if !updated {
+            existingEvent.append(contentsOf: config)
         }
+        return existingEvent
+    }
+
+    /// Check if entry is a legacy direct format (type: command at top level, not wrapped in hooks)
+    private static func isLegacyDirectEntry(_ entry: [String: Any]) -> Bool {
+        // Legacy format: {"type": "command", "command": "...claude-island-state.py..."}
+        // Modern format: {"hooks": [{"type": "command", "command": "..."}]}
+        if entry["hooks"] != nil {
+            return false // This is the modern wrapped format
+        }
+        if let type = entry["type"] as? String, type == "command",
+           let cmd = entry["command"] as? String,
+           cmd.contains("claude-island-state.py") {
+            return true
+        }
+        return false
+    }
+
+    /// Check if entry contains a Claude Island command (either wrapped or direct format)
+    private static func containsClaudeIslandCommand(_ entry: [String: Any]) -> Bool {
+        // Check modern wrapped format: {"hooks": [{"type": "command", "command": "..."}]}
+        if let entryHooks = entry["hooks"] as? [[String: Any]] {
+            for hook in entryHooks {
+                if let cmd = hook["command"] as? String,
+                   cmd.contains("claude-island-state.py") {
+                    return true
+                }
+            }
+        }
+        // Check legacy direct format: {"type": "command", "command": "..."}
+        if self.isLegacyDirectEntry(entry) {
+            return true
+        }
+        return false
     }
 }

@@ -75,12 +75,24 @@ struct NotchMenuView: View {
                 label: "Hooks",
                 isOn: self.hooksInstalled
             ) {
+                // Cancel any in-flight installation tasks first (both local and AppDelegate's)
+                // This prevents race conditions where an app-launch install could re-write settings.json
+                // after uninstall completes
+                self.hookInstallTask?.cancel()
+                self.hookInstallTask = nil
+                AppDelegate.shared?.cancelHookInstallTask()
+
                 if self.hooksInstalled {
                     HookInstaller.uninstall()
                     self.hooksInstalled = false
                 } else {
-                    HookInstaller.installIfNeeded()
-                    self.hooksInstalled = true
+                    self.hookInstallTask = Task { @MainActor in
+                        await HookInstaller.installIfNeeded()
+                        // Only update state if task wasn't cancelled
+                        if !Task.isCancelled {
+                            self.hooksInstalled = HookInstaller.isInstalled()
+                        }
+                    }
                 }
             }
 
@@ -125,6 +137,10 @@ struct NotchMenuView: View {
                 self.refreshStates()
             }
         }
+        .onDisappear {
+            // Cancel any in-flight hook installation when view disappears
+            self.hookInstallTask?.cancel()
+        }
     }
 
     // MARK: Private
@@ -133,6 +149,7 @@ struct NotchMenuView: View {
     @ObservedObject private var updateManager = UpdateManager.shared
     @State private var hooksInstalled = false
     @State private var launchAtLogin = false
+    @State private var hookInstallTask: Task<Void, Never>?
 
     /// Singletons are @Observable, so SwiftUI automatically tracks property access
     private var screenSelector = ScreenSelector.shared
