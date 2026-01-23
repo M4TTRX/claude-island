@@ -3,1215 +3,798 @@ type: "agent_requested"
 description: "Modern Swift Best Practices for macOS"
 ---
 
-# Modern Swift Best Practices for macOS Menu Bar Apps
+# Swift 6+ Coding Guidelines and Best Practices (2025-2026)
 
-**Swift 5.9–6.x patterns for building reactive, event-driven menu bar utilities on macOS 15+ have coalesced around actor-isolated state stores, the @Observable macro, and structured concurrency.**
+Swift 6 fundamentally changes how developers approach concurrency by enforcing **complete data-race safety at compile time**. This comprehensive guide covers modern Swift idioms across all major development domains, combining official Apple guidance with community consensus. The most important shift for existing codebases is adopting strict concurrency checking—start with `SWIFT_STRICT_CONCURRENCY=targeted` immediately, then migrate incrementally to Swift 6 language mode.
 
 ---
 
-## 1. Actor and concurrency patterns
+## Swift 6 language features transform concurrency safety
 
-Swift actors have become the standard for thread-safe shared state in event-driven architectures. For menu bar apps with a centralized `SessionStore`, actors eliminate manual synchronization while providing compile-time data race safety.
+Swift 6, released at WWDC 2024, prioritizes **data isolation enforcement** over flashy new features. The compiler now catches concurrent access issues at compile time rather than runtime, eliminating entire categories of data race bugs.
 
-### Use actors for shared mutable state
+### Strict concurrency checking requires explicit safety
 
-**Rule**: Design actors to protect mutable shared state, using them as thread-safe wrappers around data that requires synchronized access across multiple concurrent contexts.
-
-**Rationale**: Actors serialize access to their mutable state, preventing data races at compile-time. Unlike classes with manual locking via dispatch queues and barriers, actors hide synchronization as an implementation detail. Use actors when you need reference semantics for shared state, mutable data accessed from multiple tasks, and Sendable conformance for passing across isolation boundaries.
-
-**Example**:
+Global mutable state must now be explicitly protected. The compiler rejects patterns that were silently dangerous in Swift 5:
 
 ```swift
-actor SessionStore {
-    private var events: [SessionEvent] = []
-    private var subscribers: [UUID: (SessionEvent) -> Void] = [:]
+// ❌ Error in Swift 6: non-isolated global shared mutable state
+var logger = Logger(subsystem: "app", category: "Main")
 
-    func append(_ event: SessionEvent) {
-        events.append(event)
-        for subscriber in subscribers.values {
-            subscriber(event)
-        }
-    }
+// ✅ Option 1: Make it immutable (preferred)
+let logger = Logger(subsystem: "app", category: "Main")
 
-    func subscribe(id: UUID, handler: @escaping (SessionEvent) -> Void) {
-        subscribers[id] = handler
-    }
+// ✅ Option 2: Isolate to an actor
+@MainActor var logger = Logger(subsystem: "app", category: "Main")
 
-    // nonisolated for immutable computed properties
-    nonisolated var storeDescription: String {
-        "Session store for conversation tracking"
+// ✅ Option 3: Unsafe opt-out (last resort)
+nonisolated(unsafe) var logger = Logger(subsystem: "app", category: "Main")
+```
+
+### Typed throws enables exhaustive error handling
+
+Swift 6 introduces typed throws (SE-0413), allowing functions to specify exact error types:
+
+```swift
+enum ValidationError: Error {
+    case emptyName
+    case nameTooShort(length: Int)
+}
+
+func validate(name: String) throws(ValidationError) {
+    guard !name.isEmpty else { throw .emptyName }
+    guard name.count > 2 else { throw .nameTooShort(length: name.count) }
+}
+
+do {
+    try validate(name: "Jo")
+} catch {
+    // 'error' is inferred as ValidationError—no type casting needed
+    switch error {
+    case .emptyName: print("Name cannot be empty")
+    case .nameTooShort(let len): print("Name too short: \(len)")
     }
 }
 ```
 
-**Anti-pattern**:
+**Use typed throws** for internal code requiring exhaustive handling. **Use untyped throws** for public APIs where error types may evolve—the Swift Evolution authors explicitly recommend untyped throws for most scenarios.
+
+### Non-copyable types enforce unique ownership
+
+The `~Copyable` syntax (SE-0390) creates types that cannot be duplicated, perfect for unique resources:
 
 ```swift
-// ❌ Using class with manual dispatch queue synchronization
-final class SessionStoreOld {
-    private var events: [SessionEvent] = []
-    private let queue = DispatchQueue(label: "events", attributes: .concurrent)
+struct FileHandle: ~Copyable {
+    private var fd: Int32
 
-    func append(_ event: SessionEvent) {
-        queue.sync(flags: .barrier) { events.append(event) }  // Error-prone
+    init(path: String) throws {
+        fd = open(path, O_RDONLY)
+        guard fd >= 0 else { throw FileError.cannotOpen }
+    }
+
+    consuming func close() {
+        close(fd)
+        discard self  // Prevents deinit from running
+    }
+
+    deinit { close(fd) }  // Guaranteed cleanup
+}
+
+func useFile() {
+    let file = try! FileHandle(path: "data.txt")
+    processFile(file)  // Ownership transferred
+    // file.read()     // ❌ Error: 'file' already consumed
+}
+```
+
+### Migration strategy: incremental adoption
+
+| Step | Action | Build Setting |
+|------|--------|---------------|
+| 1 | Enable upcoming features individually | `Swift Compiler > Upcoming Features` |
+| 2 | Set strict concurrency to "Targeted" | `SWIFT_STRICT_CONCURRENCY=targeted` |
+| 3 | Fix all warnings | — |
+| 4 | Set strict concurrency to "Complete" | `SWIFT_STRICT_CONCURRENCY=complete` |
+| 5 | Enable Swift 6 language mode | `SWIFT_VERSION=6` |
+
+**Start with your UI layer** (often simpler with `@MainActor` inference), then progress to business logic. Swift 6 is opt-in per module—dependencies can use different Swift versions without compatibility issues.
+
+---
+
+## Concurrency patterns require understanding isolation boundaries
+
+Swift 6.2 introduces "Approachable Concurrency" with **default main actor isolation** in new Xcode projects and `nonisolated(nonsending)` semantics for async functions. Understanding when to use actors, classes, and structs is critical.
+
+### Actor selection follows four conditions
+
+Use an actor only when all four conditions are met:
+1. Non-Sendable mutable state exists
+2. State needs reference from multiple places
+3. Operations must be atomic
+4. Operations cannot run on an existing actor (like MainActor)
+
+```swift
+// ✅ Actor: protects mutable shared state
+actor BankAccount {
+    private var balance: Double = 0
+
+    func deposit(amount: Double) { balance += amount }
+
+    func withdraw(amount: Double) -> Bool {
+        guard balance >= amount else { return false }
+        balance -= amount
+        return true
+    }
+}
+
+// ❌ Don't use actors for stateless services
+actor NetworkClient {  // Wrong: no mutable state to protect
+    func fetch(url: URL) async throws -> Data { ... }
+}
+
+// ✅ Use struct instead
+struct NetworkClient: Sendable {
+    func fetch(url: URL) async throws -> Data { ... }
+}
+```
+
+### Sendable conformance strategies determine thread safety
+
+| Type | Sendable Conformance |
+|------|---------------------|
+| Structs with Sendable properties | Implicit |
+| Enums with Sendable associated values | Implicit |
+| `final class` with immutable properties | Explicit `Sendable` |
+| Classes with internal synchronization | `@unchecked Sendable` (use cautiously) |
+| Actors | Automatic |
+
+```swift
+// Swift 6+ with iOS 18: Use Mutex for true Sendable
+import Synchronization
+
+final class ThreadSafeCache: Sendable {
+    private let cache = Mutex<[String: Sendable]>([:])
+
+    func get(_ key: String) -> Sendable? {
+        cache.withLock { $0[key] }
     }
 }
 ```
 
-**When to deviate**: Use `@MainActor` classes (not custom actors) for SwiftUI view models with `@Published` properties, since `@StateObject`/`@ObservedObject` already leverage `@MainActor`. Use structs for simple immutable data models that don't need shared mutable state. Avoid actors for performance-critical paths where serialization overhead matters.
+**Never use `@unchecked Sendable`** just to silence warnings—only when you've implemented thread safety via locks, queues, or atomics.
 
-### Mark view model classes with @MainActor
-
-**Rule**: Annotate all observable view model classes with `@MainActor` to guarantee UI updates happen on the main thread.
-
-**Rationale**: In Xcode 16+, all SwiftUI `View` types automatically receive `@MainActor` isolation. However, explicitly marking view models with `@MainActor` ensures `@Published` property updates always occur on the main thread, works correctly when view models perform async/await work, and future-proofs code as Swift 6 removes implicit inference from property wrappers.
-
-**Example**:
+### MainActor isolation patterns for UI code
 
 ```swift
+// Entire class isolated (recommended for ViewModels)
 @MainActor
-class MenuBarViewModel: ObservableObject {
-    @Published var statusItems: [StatusItem] = []
-    @Published var isLoading = false
+class ProfileViewModel {
+    var profile: Profile?
 
-    private let sessionStore: SessionStore
+    func loadData() async {
+        profile = await fetchProfile()  // Guaranteed main thread
+    }
+}
 
-    func loadEvents() {
-        Task {
-            isLoading = true
-            defer { isLoading = false }
-
-            let events = try await sessionStore.fetchEvents()
-            statusItems = events.map { StatusItem(from: $0) }
-            // ✅ Safe: @MainActor guarantees main thread execution
-        }
+// Explicit switching when needed
+func processData() async {
+    let result = await heavyComputation()  // Background
+    await MainActor.run {
+        self.label.text = result.description  // Main thread
     }
 }
 ```
 
-**Anti-pattern**:
+### Task cancellation requires cooperative checking
+
+Swift uses cooperative cancellation—tasks must explicitly check and respond:
 
 ```swift
-// ❌ Completion handler pattern - @MainActor has NO effect
-@MainActor class ViewModel: ObservableObject {
-    @Published var data: String = ""
-
-    func fetchData() {
-        networkService.fetch { [weak self] result in
-            // ⚠️ This may NOT run on main thread!
-            self?.data = result  // Potential crash
-        }
+func processItems(_ items: [Item]) async throws {
+    for item in items {
+        try Task.checkCancellation()  // Throws if cancelled
+        await process(item)
     }
 }
-```
 
-**When to deviate**: Use `nonisolated` for pure functions that don't access actor state. Use `MainActor.run {}` or `MainActor.assumeIsolated {}` when bridging callback-based APIs.
-
-### Enforce Sendable correctness across actor boundaries
-
-**Rule**: Mark types crossing actor boundaries as `Sendable` by using value types with Sendable properties, immutable final classes, or actor-isolated types. Avoid `@unchecked Sendable` except for internally-synchronized types.
-
-**Rationale**: Sendable is the compiler's mechanism for ensuring thread-safe data transfer between isolation domains. Swift automatically infers Sendable for value types with all-Sendable stored properties, actors, and final classes with only constant Sendable properties.
-
-**Example**:
-
-```swift
-// ✅ Value types: automatically Sendable if all properties are Sendable
-struct ConversationEvent: Sendable {
-    let id: UUID
-    let timestamp: Date
-    let eventType: EventType  // Must also be Sendable
-}
-
-// ✅ Final class with immutable Sendable properties
-final class EventConfiguration: Sendable {
-    let refreshInterval: TimeInterval
-    let maxRetries: Int
-}
-
-// ✅ Using 'sending' parameter for non-Sendable in safe contexts (Swift 6)
-actor DataProcessor {
-    func process(data: sending Data) async -> ProcessedResult {
-        // Compiler verifies 'data' is disconnected from caller
-    }
-}
-```
-
-**Anti-pattern**:
-
-```swift
-// ❌ Non-final class cannot be Sendable
-class NetworkConfig: Sendable {  // Compiler error
-    let baseURL: URL
-}
-
-// ❌ @unchecked Sendable without internal synchronization
-class UnsafeCache: @unchecked Sendable {
-    var items: [String: Data] = [:]  // Data race waiting to happen!
-}
-```
-
-### Prefer structured concurrency over fire-and-forget tasks
-
-**Rule**: Use structured concurrency (`async let`, `TaskGroup`) over unstructured (`Task {}`, `Task.detached`) to leverage automatic cancellation propagation and resource cleanup. Use `AsyncStream` for event-driven callbacks.
-
-**Rationale**: Structured concurrency ensures child tasks cannot outlive their parent scope, providing automatic cancellation, priority inheritance, and error propagation. For menu bar apps with real-time events, `AsyncStream` bridges callback-based APIs into async/await while maintaining proper lifecycle management.
-
-**Example**:
-
-```swift
-// ✅ AsyncStream for real-time event handling
-func systemEventStream() -> AsyncStream<SystemEvent> {
-    AsyncStream { continuation in
-        let observer = NotificationCenter.default.addObserver(
-            forName: .systemEventOccurred,
-            object: nil,
-            queue: nil
-        ) { notification in
-            if let event = notification.object as? SystemEvent {
-                continuation.yield(event)
+// For cleanup on cancellation
+func fetchWithCancellation() async throws -> Data {
+    var task: URLSessionDataTask?
+    return try await withTaskCancellationHandler {
+        try await withCheckedThrowingContinuation { continuation in
+            task = URLSession.shared.dataTask(with: url) { data, _, error in
+                if let data { continuation.resume(returning: data) }
+                else { continuation.resume(throwing: error ?? URLError(.unknown)) }
             }
+            task?.resume()
         }
-
-        // Critical: Clean up when stream terminates
-        continuation.onTermination = { @Sendable _ in
-            NotificationCenter.default.removeObserver(observer)
-        }
-    }
-}
-
-// ✅ SwiftUI integration with automatic cancellation
-struct MenuBarView: View {
-    var body: some View {
-        ContentView()
-            .task {
-                // Automatically cancelled when view disappears
-                for await event in systemEventStream() {
-                    await handleEvent(event)
-                }
-            }
-    }
-}
-```
-
-**Anti-pattern**:
-
-```swift
-// ❌ Fire-and-forget Task without lifecycle management
-func startMonitoring() {
-    Task {  // Who cancels this? Memory leak risk!
-        while true {
-            let status = await checkStatus()
-            updateUI(status)
-            try? await Task.sleep(for: .seconds(5))
-        }
-    }
-}
-```
-
-**When to deviate**: Use unstructured `Task {}` in SwiftUI event handlers (button actions) where view lifecycle doesn't apply. Use `Task.detached` only when you explicitly need to escape inherited actor context and priority.
-
-### Handle actor reentrancy defensively
-
-**Rule**: Assume actor state may change across any `await`; validate assumptions after suspension points and use task-caching patterns to prevent duplicate work.
-
-**Rationale**: Actor reentrancy means that while an actor method awaits an async call, other tasks can execute on that same actor. This prevents deadlocks but means state can change unexpectedly during suspension.
-
-**Example**:
-
-```swift
-// ✅ Task-caching pattern to prevent duplicate network calls
-actor TokenManager {
-    private var cachedToken: String?
-    private var refreshTask: Task<String, Error>?
-
-    func getToken() async throws -> String {
-        if let token = cachedToken, isValid(token) {
-            return token
-        }
-
-        // If refresh already in progress, await same task
-        if let existingTask = refreshTask {
-            return try await existingTask.value
-        }
-
-        // Start new refresh, store BEFORE await
-        let task = Task { try await performTokenRefresh() }
-        refreshTask = task  // ✅ Set before suspension point
-
-        do {
-            let token = try await task.value
-            cachedToken = token
-            refreshTask = nil
-            return token
-        } catch {
-            refreshTask = nil
-            throw error
-        }
-    }
-}
-```
-
-**Anti-pattern**:
-
-```swift
-// ❌ Assuming state unchanged after await
-actor BrokenTokenManager {
-    var token: String?
-
-    func getToken() async throws -> String {
-        if token == nil {
-            // Multiple concurrent calls each start their own refresh!
-            token = try await refreshToken()
-        }
-        return token!
+    } onCancel: {
+        task?.cancel()  // Propagate cancellation
     }
 }
 ```
 
 ---
 
-## 2. SwiftUI and AppKit interop
+## Memory management leverages ownership modifiers
 
-Modern SwiftUI (iOS 17+/macOS 14+) introduces the `@Observable` macro as the preferred observation mechanism, while AppKit integration remains essential for floating panel overlays and advanced menu bar features.
+Swift 5.9+ introduced explicit ownership control with `borrowing`, `consuming`, and `inout` modifiers that eliminate unnecessary ARC operations.
 
-### Adopt @Observable with @State for owned models
+### Ownership modifiers optimize performance
 
-**Rule**: Use `@Observable` macro with `@State` property wrapper for owned model objects instead of `ObservableObject` with `@StateObject`.
-
-**Rationale**: The @Observable macro provides per-property change tracking—SwiftUI only redraws views when properties they actually access change, versus ObservableObject which triggers redraws for ANY @Published property change. This significantly reduces unnecessary view re-evaluations.
-
-**Example**:
+| Modifier | Semantics | Use Case |
+|----------|-----------|----------|
+| `borrowing` | Read-only access, caller retains ownership | Inspecting values |
+| `consuming` | Transfers ownership, caller cannot reuse | Initializers, final operations |
+| `inout` | Temporary write access | Mutation operations |
 
 ```swift
-import Observation
+struct Message: ~Copyable {
+    var content: String
 
-@Observable
-final class OverlayViewModel {
-    private(set) var messages: [Message] = []
-    private(set) var connectionStatus: ConnectionStatus = .disconnected
-    var debugCounter: Int = 0  // Changes won't trigger UI updates if unused
-
-    func loadMessages() async { /* ... */ }
+    borrowing func peek() -> String { content }  // Read-only
+    consuming func send() { print(content) }     // Takes ownership
 }
 
-struct OverlayView: View {
-    @State var viewModel = OverlayViewModel()  // Use @State, not @StateObject
+// Eliminates defensive copies for large types
+func process(_ data: borrowing LargeData) { /* no copy */ }
+```
 
-    var body: some View {
-        VStack {
-            Text("Status: \(viewModel.connectionStatus.description)")
-            ForEach(viewModel.messages) { message in
-                MessageRow(message: message)
+### Retain cycles require weak/unowned references
+
+```swift
+// Delegate pattern: always weak
+protocol DataManagerDelegate: AnyObject { }
+class DataManager {
+    weak var delegate: DataManagerDelegate?
+}
+
+// Closure captures: use capture lists
+class ViewController {
+    var completionHandler: (() -> Void)?
+
+    func setup() {
+        completionHandler = { [weak self] in
+            guard let self else { return }
+            self.updateUI()
+        }
+    }
+}
+
+// Parent-child relationships: unowned when guaranteed valid
+class CreditCard {
+    unowned let customer: Customer  // Card can't exist without customer
+}
+```
+
+### Copy-on-write for custom large types
+
+```swift
+struct CopyOnWriteBox<T> {
+    private final class Ref<T> {
+        var value: T
+        init(_ value: T) { self.value = value }
+    }
+
+    private var ref: Ref<T>
+
+    var value: T {
+        get { ref.value }
+        set {
+            if !isKnownUniquelyReferenced(&ref) {
+                ref = Ref(newValue)  // Copy on mutation
+            } else {
+                ref.value = newValue  // Mutate in place
             }
         }
-    }
-}
-```
-
-**Anti-pattern**:
-
-```swift
-// ❌ Legacy approach - triggers redraw for ANY @Published change
-final class OverlayViewModel: ObservableObject {
-    @Published private(set) var messages: [Message] = []
-    @Published private(set) var debugCounter: Int = 0  // Changes here trigger ALL views!
-}
-
-struct OverlayView: View {
-    @StateObject var viewModel = OverlayViewModel()  // ❌ @StateObject with @Published
-}
-```
-
-**When to deviate**: Use ObservableObject when targeting macOS 13 or earlier, or when integrating with Combine pipelines that rely on `objectWillChange` publisher.
-
-### Use @Bindable for creating bindings to @Observable objects
-
-**Rule**: Use `@Bindable` property wrapper to create bindings to properties of @Observable objects; use it inline in body when the object comes from @Environment.
-
-**Rationale**: @Observable objects don't provide projected values ($) automatically like @ObservedObject did. @Bindable wraps the observable to enable binding syntax.
-
-**Example**:
-
-```swift
-@Observable
-class SettingsModel {
-    var apiEndpoint: String = ""
-    var autoRefresh: Bool = true
-}
-
-// Option 1: @Bindable on property
-struct SettingsView: View {
-    @Bindable var settings: SettingsModel
-
-    var body: some View {
-        TextField("API Endpoint", text: $settings.apiEndpoint)
-        Toggle("Auto Refresh", isOn: $settings.autoRefresh)
-    }
-}
-
-// Option 2: Inline @Bindable for @Environment objects
-struct EnvironmentSettingsView: View {
-    @Environment(SettingsModel.self) private var settings
-
-    var body: some View {
-        @Bindable var settings = settings  // Create bindable inline
-        TextField("API Endpoint", text: $settings.apiEndpoint)
-    }
-}
-```
-
-### Subclass NSPanel for floating overlay windows
-
-**Rule**: Create floating overlay windows by subclassing `NSPanel` with `.nonactivatingPanel` style mask and `.floating` window level.
-
-**Rationale**: NSPanel provides panel-specific behaviors like floating above other windows, hiding when app deactivates, and non-activating interaction essential for Dynamic Island-style overlays.
-
-**Example**:
-
-```swift
-class FloatingPanel<Content: View>: NSPanel {
-    @Binding var isPresented: Bool
-
-    init(view: () -> Content, contentRect: NSRect, isPresented: Binding<Bool>) {
-        self._isPresented = isPresented
-
-        super.init(
-            contentRect: contentRect,
-            styleMask: [.nonactivatingPanel, .titled, .fullSizeContentView],
-            backing: .buffered,
-            defer: false
-        )
-
-        // Floating panel configuration
-        isFloatingPanel = true
-        level = .floating
-        collectionBehavior.insert(.fullScreenAuxiliary)
-
-        // Hide title bar but keep window moveable
-        titleVisibility = .hidden
-        titlebarAppearsTransparent = true
-        isMovableByWindowBackground = true
-        hidesOnDeactivate = true
-
-        // Hide traffic lights
-        standardWindowButton(.closeButton)?.isHidden = true
-        standardWindowButton(.miniaturizeButton)?.isHidden = true
-        standardWindowButton(.zoomButton)?.isHidden = true
-
-        animationBehavior = .utilityWindow
-        contentView = NSHostingView(rootView: view().ignoresSafeArea())
-    }
-
-    override func resignMain() {
-        super.resignMain()
-        close()
-    }
-
-    override func close() {
-        super.close()
-        isPresented = false
-    }
-
-    override var canBecomeKey: Bool { true }
-    override var canBecomeMain: Bool { true }
-}
-```
-
-### Use MenuBarExtra for SwiftUI menu bar apps
-
-**Rule**: Use `MenuBarExtra` scene type for menu bar apps; use `.menuBarExtraStyle(.window)` for custom UI beyond simple menus.
-
-**Rationale**: MenuBarExtra (macOS 13+) is the native SwiftUI approach to menu bar items without AppKit bridging, with automatic lifecycle management.
-
-**Example**:
-
-```swift
-@main
-struct ConversationOverlayApp: App {
-    @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
-
-    var body: some Scene {
-        // Window-style for custom SwiftUI overlay
-        MenuBarExtra("ConvoOverlay", systemImage: "bubble.left.and.bubble.right") {
-            OverlayContentView()
-                .frame(width: 400, height: 500)
-        }
-        .menuBarExtraStyle(.window)
-
-        Settings {
-            SettingsView()
-        }
-    }
-}
-
-// Hide dock icon: add LSUIElement = YES to Info.plist
-```
-
-**When to deviate**: Use NSStatusItem directly when needing right-click context menus, custom button behaviors, or targeting macOS 12.
-
-### Use PhaseAnimator for multi-step animations
-
-**Rule**: Use `PhaseAnimator` or `.phaseAnimator()` modifier for animations with discrete states/phases.
-
-**Rationale**: PhaseAnimator provides declarative multi-step animations that are cleaner than manual state management with withAnimation, ideal for Dynamic Island-style transitions.
-
-**Example**:
-
-```swift
-enum OverlayPhase: CaseIterable {
-    case collapsed, expanding, expanded, collapsing
-
-    var scale: CGFloat {
-        switch self {
-        case .collapsed: return 0.8
-        case .expanding: return 1.1
-        case .expanded: return 1.0
-        case .collapsing: return 0.9
-        }
-    }
-
-    var opacity: Double {
-        switch self {
-        case .collapsed, .collapsing: return 0.0
-        case .expanding, .expanded: return 1.0
-        }
-    }
-}
-
-struct AnimatedOverlay: View {
-    @State private var trigger = false
-
-    var body: some View {
-        OverlayContent()
-            .phaseAnimator(OverlayPhase.allCases, trigger: trigger) { content, phase in
-                content
-                    .scaleEffect(phase.scale)
-                    .opacity(phase.opacity)
-            } animation: { phase in
-                switch phase {
-                case .expanding: .spring(duration: 0.25)
-                case .collapsing: .easeOut(duration: 0.15)
-                default: .default
-                }
-            }
     }
 }
 ```
 
 ---
 
-## 3. Event-driven architecture
+## SwiftUI embraces @Observable for precise invalidation
 
-Unidirectional data flow patterns provide predictable state management essential for real-time event handling. Model all state mutations as typed events flowing through a central reducer.
+The `@Observable` macro (iOS 17+) replaces `ObservableObject` with property-level observation, dramatically improving performance.
 
-### Centralize state mutations through typed actions
-
-**Rule**: All state mutations must flow through a single reducer function that processes typed actions and produces new state.
-
-**Rationale**: Unidirectional data flow ensures predictable state changes, simplifies debugging by making cause and effect traceable, and eliminates scattered state management. For menu bar apps processing socket events, this creates a clear audit trail.
-
-**Example**:
+### @Observable eliminates unnecessary redraws
 
 ```swift
-// State - Single source of truth
-struct SessionState: Equatable {
-    var messages: [Message] = []
-    var connectionStatus: ConnectionStatus = .disconnected
-    var isOverlayVisible: Bool = false
+// Old pattern (ObservableObject)
+final class CounterViewModel: ObservableObject {
+    @Published var count = 0
+    @Published var unrelatedValue = 0  // Changes trigger ALL view updates
 }
 
-// Actions as enum with associated values
-enum SessionAction {
-    case messageReceived(Message)
-    case connectionStatusChanged(ConnectionStatus)
-    case toggleOverlay
-    case clearMessages
-    case socketError(Error)
+// New pattern (@Observable)
+@Observable
+final class CounterViewModel {
+    var count = 0
+    var unrelatedValue = 0  // Changes only affect views reading this property
 }
 
-// Pure reducer function
-func sessionReducer(state: inout SessionState, action: SessionAction) {
-    switch action {
-    case .messageReceived(let message):
-        state.messages.append(message)
-    case .connectionStatusChanged(let status):
-        state.connectionStatus = status
-    case .toggleOverlay:
-        state.isOverlayVisible.toggle()
-    case .clearMessages:
-        state.messages.removeAll()
-    case .socketError:
-        state.connectionStatus = .error
+struct CounterView: View {
+    @State var viewModel = CounterViewModel()  // Note: @State, not @StateObject
+
+    var body: some View {
+        Text("\(viewModel.count)")  // Only redraws when count changes
     }
 }
 ```
 
-### Model UI phases with enum-based state machines
+### State management property wrapper selection
 
-**Rule**: Model UI phases as enum cases with associated values, and validate transitions by only allowing specific event→state pairs.
+| Wrapper | Use When | Owns Data? |
+|---------|----------|------------|
+| `@State` | View-local values OR `@Observable` ownership | Yes |
+| `@Binding` | Child needs read/write access to parent's state | No |
+| `@Environment` | System values or `@Observable` injection | No |
+| `@Bindable` | Creating bindings from `@Observable` properties | No |
 
-**Rationale**: State machines prevent degenerate states (showing loading AND error simultaneously), make impossible states impossible, and provide clear documentation of valid app flows.
-
-**Example**:
+### NavigationStack with type-safe routes
 
 ```swift
-enum ViewState<T> {
-    case idle
-    case loading(previousData: T?)
-    case success(T)
-    case error(Error, previousData: T?)
+enum Route: Hashable {
+    case detail(id: Int)
+    case settings
+    case profile(userId: String)
 }
 
-extension ViewState {
-    mutating func handleEvent(_ event: LoadEvent<T>) {
-        switch (self, event) {
-        case (.idle, .startLoading):
-            self = .loading(previousData: nil)
-        case (.success(let data), .startLoading):
-            self = .loading(previousData: data)
-        case (.loading, .loadSuccess(let data)):
-            self = .success(data)
-        case (.loading(let prev), .loadFailure(let error)):
-            self = .error(error, previousData: prev)
-        case (.error(_, let prev), .retry):
-            self = .loading(previousData: prev)
-        default:
-            break // Invalid transition - no-op
+struct ContentView: View {
+    @State private var path = NavigationPath()
+
+    var body: some View {
+        NavigationStack(path: $path) {
+            HomeView()
+                .navigationDestination(for: Route.self) { route in
+                    switch route {
+                    case .detail(let id): DetailView(id: id)
+                    case .settings: SettingsView()
+                    case .profile(let userId): ProfileView(userId: userId)
+                    }
+                }
         }
     }
 }
 ```
 
-**Anti-pattern**:
+### Performance optimization techniques
+
+- **Use `let` instead of `var`** for constants—SwiftUI knows they won't change
+- **Extract subviews** to isolate redraws to specific components
+- **Use `LazyVStack`/`LazyHStack`** for large scrolling content
+- **Debug redraws** with `let _ = Self._printChanges()` in view body
+- **Avoid `AnyView`**—it erases type information and hurts diffing
+
+---
+
+## Architecture patterns adapt to modern Swift
+
+MVVM with `@Observable` has become the de facto standard, though alternatives like TCA serve specific needs.
+
+### MVVM with @Observable
 
 ```swift
-// ❌ Multiple booleans create impossible states
-class ViewModel {
+@Observable
+class ProfileViewModel {
+    var profile: Profile?
     var isLoading = false
-    var hasError = false
-    var hasData = false
-    // Can be loading AND hasError AND hasData simultaneously!
-}
-```
 
-### Use CurrentValueSubject for state, PassthroughSubject for events
-
-**Rule**: Use `CurrentValueSubject` when subscribers need immediate access to current value; use `PassthroughSubject` for discrete events relevant only at emission time.
-
-**Rationale**: CurrentValueSubject maintains state and immediately delivers its current value to new subscribers. PassthroughSubject has no memory of past values—like a doorbell versus a light switch.
-
-**Example**:
-
-```swift
-actor SessionStore {
-    // CurrentValueSubject for state - new subscribers get current value
-    let connectionState = CurrentValueSubject<ConnectionStatus, Never>(.disconnected)
-
-    // PassthroughSubject for events - no replay for new subscribers  
-    let socketEvents = PassthroughSubject<SocketEvent, Never>()
-
-    func updateConnection(_ status: ConnectionStatus) {
-        connectionState.send(status)
-        // Or: connectionState.value = status
-    }
-
-    func emitEvent(_ event: SocketEvent) {
-        socketEvents.send(event)
-    }
-}
-```
-
-### Apply debounce for search, throttle for scroll-like events
-
-**Rule**: Use `debounce` when waiting for a pause in activity before processing; use `throttle` to limit emission rate to a maximum frequency.
-
-**Example**:
-
-```swift
-class SearchViewModel: ObservableObject {
-    @Published var searchText = ""
-    @Published var results: [SearchResult] = []
-
-    private var cancellables = Set<AnyCancellable>()
-
-    init() {
-        // DEBOUNCE: Wait 300ms after user stops typing
-        $searchText
-            .debounce(for: .milliseconds(300), scheduler: RunLoop.main)
-            .removeDuplicates()
-            .filter { !$0.isEmpty }
-            .flatMap { query in searchService.search(query) }
-            .receive(on: DispatchQueue.main)
-            .assign(to: &$results)
+    func loadProfile() async {
+        isLoading = true
+        defer { isLoading = false }
+        profile = try? await ProfileService.fetch()
     }
 }
 
-// THROTTLE: Process scroll at most once per 100ms
-scrollPosition
-    .throttle(for: .milliseconds(100), scheduler: RunLoop.main, latest: true)
-    .sink { position in updateVisibleItems(at: position) }
-    .store(in: &cancellables)
-```
+struct ProfileView: View {
+    @State var viewModel = ProfileViewModel()
 
----
-
-## 4. Combine and async/await interop
-
-Bridging Combine publishers with Swift concurrency enables gradual migration and interoperability between reactive and async paradigms.
-
-### Bridge publishers to async with .values property
-
-**Rule**: Use `.values` property to convert any Publisher to an AsyncSequence for iteration with `for await`; create custom `asyncMap` operators to call async functions within Combine pipelines.
-
-**Example**:
-
-```swift
-// Publisher → AsyncSequence using .values
-actor SocketHandler {
-    private let eventSubject = CurrentValueSubject<SocketEvent?, Never>(nil)
-
-    // Expose as AsyncSequence for structured concurrency
-    var events: AsyncPublisher<AnyPublisher<SocketEvent?, Never>> {
-        eventSubject.eraseToAnyPublisher().values
-    }
-}
-
-// Usage with async/await
-func processSocketEvents() async {
-    for await event in await socketHandler.events {
-        guard let event else { continue }
-        await handleEvent(event)
-    }
-    // Loop ends when Task is cancelled or publisher completes
-}
-
-// Custom asyncMap for calling async within Combine
-extension Publisher {
-    func asyncMap<T>(
-        _ transform: @escaping (Output) async throws -> T
-    ) -> Publishers.FlatMap<Future<T, Error>, Self> {
-        flatMap { value in
-            Future { promise in
-                Task {
-                    do {
-                        let output = try await transform(value)
-                        promise(.success(output))
-                    } catch {
-                        promise(.failure(error))
-                    }
-                }
+    var body: some View {
+        Group {
+            if viewModel.isLoading {
+                ProgressView()
+            } else if let profile = viewModel.profile {
+                ProfileContent(profile: profile)
             }
         }
+        .task { await viewModel.loadProfile() }
     }
 }
 ```
 
-### Prevent retain cycles with proper subscription management
+### Dependency injection without frameworks
 
-**Rule**: Always use `[weak self]` in `sink` closures that capture self; prefer `assign(to: &$property)` over `assign(to:on:)` for @Published properties; store cancellables in the owning object.
-
-**Rationale**: `assign(to:on:)` creates a strong reference cycle (subscription → self → subscriptions). AnyCancellable auto-cancels on dealloc, binding subscription lifetime to object lifetime.
-
-**Example**:
+SwiftLee's pattern mirrors SwiftUI's `@Environment`:
 
 ```swift
-// ❌ Anti-pattern: Creates retain cycle
-class BadViewModel: ObservableObject {
-    @Published var time: TimeInterval = 0
-    private var cancellables = Set<AnyCancellable>()
-
-    func start() {
-        Timer.publish(every: 1, on: .main, in: .default)
-            .autoconnect()
-            .map(\.timeIntervalSince1970)
-            .assign(to: \.time, on: self)  // Strong reference to self!
-            .store(in: &cancellables)
-    }
+protocol InjectionKey {
+    associatedtype Value
+    static var currentValue: Self.Value { get set }
 }
 
-// ✅ Best practice: Use assign(to:) with @Published
-class GoodViewModel: ObservableObject {
-    @Published var time: TimeInterval = 0
-
-    func start() {
-        Timer.publish(every: 1, on: .main, in: .default)
-            .autoconnect()
-            .map(\.timeIntervalSince1970)
-            .assign(to: &$time)  // Lifecycle managed by @Published
+@propertyWrapper
+struct Injected<T> {
+    private let keyPath: WritableKeyPath<InjectedValues, T>
+    var wrappedValue: T {
+        get { InjectedValues[keyPath] }
+        set { InjectedValues[keyPath] = newValue }
     }
-}
-
-// ✅ Alternative: Use [weak self] with sink
-repository.dataPublisher
-    .sink { [weak self] completion in
-        if case .failure(let error) = completion {
-            self?.handleError(error)
-        }
-    } receiveValue: { [weak self] data in
-        self?.processData(data)
-    }
-    .store(in: &cancellables)
-```
-
----
-
-## 5. File I/O and JSONL parsing
-
-Async file reading and streaming JSONL parsing are essential for conversation history handling. Use truly non-blocking I/O patterns that integrate with structured concurrency.
-
-### Stream large files with FileHandle.bytes.lines
-
-**Rule**: Use `FileHandle.bytes.lines` for memory-efficient streaming of large text files, especially JSONL.
-
-**Rationale**: The AsyncSequence drives reading in chunks, keeping memory usage constant regardless of file size—critical for conversation histories that may contain thousands of entries.
-
-**Example**:
-
-```swift
-struct JSONLParser<T: Decodable> {
-    let decoder = JSONDecoder()
-
-    func parse(from url: URL) -> AsyncThrowingStream<T, Error> {
-        AsyncThrowingStream { continuation in
-            Task {
-                do {
-                    let handle = try FileHandle(forReadingFrom: url)
-                    for try await line in handle.bytes.lines {
-                        guard !line.isEmpty else { continue }
-                        let data = Data(line.utf8)
-                        let item = try decoder.decode(T.self, from: data)
-                        continuation.yield(item)
-                    }
-                    continuation.finish()
-                } catch {
-                    continuation.finish(throwing: error)
-                }
-            }
-        }
+    init(_ keyPath: WritableKeyPath<InjectedValues, T>) {
+        self.keyPath = keyPath
     }
 }
 
 // Usage
-for try await message in JSONLParser<ConversationMessage>().parse(from: historyURL) {
-    await sessionStore.append(message)
-}
-```
-
-**Anti-pattern**:
-
-```swift
-// ❌ Loading entire file into memory
-let content = try String(contentsOf: url)
-let lines = content.split(separator: "\n")
-// Memory spike for large files!
-```
-
-### Handle schema evolution with versioned Codable
-
-**Rule**: Implement incremental migration by chaining version types with `PreviousVersion` associated types, or provide default values for new optional fields.
-
-**Example**:
-
-```swift
-struct IPCMessage: Codable {
-    var type: String
-    var payload: Data
-    var priority: Int = 0  // New field with default - old data decodes fine
-
-    enum CodingKeys: String, CodingKey {
-        case type, payload, priority
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        type = try container.decode(String.self, forKey: .type)
-        payload = try container.decode(Data.self, forKey: .payload)
-        priority = try container.decodeIfPresent(Int.self, forKey: .priority) ?? 0
-    }
+struct DataController {
+    @Injected(\.networkProvider) var networkProvider: NetworkProviding
 }
 
-// Property wrapper for missing arrays
-@propertyWrapper
-struct DefaultEmpty<T: Codable & RangeReplaceableCollection>: Codable {
-    var wrappedValue: T
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.singleValueContainer()
-        wrappedValue = (try? container.decode(T.self)) ?? T()
-    }
-}
+// Testing
+InjectedValues[\.networkProvider] = MockedNetworkProvider()
 ```
+
+### The Composable Architecture considerations
+
+TCA (Point-Free) excels for apps requiring **unidirectional data flow**, **strict architectural consistency**, and **exhaustive testing**. However, it has a steep learning curve and adds dependency on two maintainers. Consider TCA when you need cross-platform business logic (used by Arc browser) or complex state sharing across screens.
 
 ---
 
-## 6. Unix socket IPC with GCD DispatchSource
+## Testing shifts to Swift Testing framework
 
-GCD DispatchSource provides event-driven socket I/O that integrates with Swift concurrency through AsyncStream bridging.
+The new Swift Testing framework (`@Test`, `#expect`, `#require`) offers cleaner syntax and better async support than XCTest.
 
-### Create dispatch sources for non-blocking socket I/O
+### Swift Testing vs XCTest comparison
 
-**Rule**: Use `DISPATCH_SOURCE_TYPE_READ` dispatch sources with non-blocking file descriptors, always installing cancellation handlers for cleanup.
-
-**Example**:
-
-```swift
-class UnixSocketConnection {
-    private var readSource: DispatchSourceRead?
-    private let queue = DispatchQueue(label: "socket.io")
-    private var fd: Int32 = -1
-
-    func connect(to path: String) throws {
-        fd = socket(AF_UNIX, SOCK_STREAM, 0)
-        guard fd >= 0 else { throw SocketError.createFailed(errno) }
-
-        // Set non-blocking
-        var flags = fcntl(fd, F_GETFL)
-        fcntl(fd, F_SETFL, flags | O_NONBLOCK)
-
-        var addr = sockaddr_un()
-        addr.sun_family = sa_family_t(AF_UNIX)
-        withUnsafeMutablePointer(to: &addr.sun_path.0) { ptr in
-            _ = path.withCString { strncpy(ptr, $0, 104) }
-        }
-
-        // Connect...
-        setupReadSource()
-    }
-
-    private func setupReadSource() {
-        readSource = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
-        readSource?.setEventHandler { [weak self] in
-            self?.handleRead()
-        }
-        readSource?.setCancelHandler { [weak self] in
-            if let fd = self?.fd, fd >= 0 { close(fd) }
-        }
-        readSource?.resume()
-    }
-}
-```
-
-### Wrap DispatchSource in AsyncStream for structured concurrency
-
-**Rule**: Bridge GCD dispatch sources to Swift concurrency using AsyncStream with proper termination handling.
-
-**Example**:
-
-```swift
-actor SocketActor {
-    private var readSource: DispatchSourceRead?
-    private let fd: Int32
-
-    func dataStream() -> AsyncStream<Data> {
-        AsyncStream { continuation in
-            let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: .global())
-            source.setEventHandler {
-                var buffer = [UInt8](repeating: 0, count: 4096)
-                let n = read(self.fd, &buffer, buffer.count)
-                if n > 0 {
-                    continuation.yield(Data(buffer[..<n]))
-                } else if n == 0 {
-                    continuation.finish()
-                }
-            }
-            source.setCancelHandler {
-                continuation.finish()
-            }
-            continuation.onTermination = { _ in
-                source.cancel()
-            }
-            source.resume()
-            self.readSource = source
-        }
-    }
-}
-
-// Usage with structured concurrency
-for await data in await socketActor.dataStream() {
-    try await processIncomingData(data)
-}
-```
-
-### Implement exponential backoff with jitter for reconnection
-
-**Rule**: Use exponential backoff with random jitter for reconnection to prevent thundering herd problems.
-
-**Example**:
-
-```swift
-actor ReconnectionManager {
-    private var attempt = 0
-    private let maxAttempts = 10
-    private let baseDelay: Double = 0.5
-    private let maxDelay: Double = 60.0
-
-    func reconnect(using connector: () async throws -> Void) async throws {
-        while attempt < maxAttempts {
-            try Task.checkCancellation()
-            do {
-                try await connector()
-                attempt = 0  // Reset on success
-                return
-            } catch {
-                attempt += 1
-                let delay = calculateBackoff()
-                try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-            }
-        }
-        throw ConnectionError.maxRetriesExceeded
-    }
-
-    private func calculateBackoff() -> Double {
-        let exponential = min(baseDelay * pow(2.0, Double(attempt)), maxDelay)
-        let jitter = Double.random(in: 0...0.5) * exponential
-        return exponential + jitter
-    }
-}
-```
-
----
-
-## 7. Testing async and actor code
-
-Swift Testing (introduced at WWDC24) provides cleaner syntax for async testing with the `@Test` macro and `#expect` assertions.
-
-### Use Swift Testing @Test macro and #expect assertions
-
-**Rule**: Use the `@Test` macro for test functions and `#expect` macro for all assertions, replacing XCTest's multiple assertion variants.
-
-**Rationale**: Swift Testing provides better failure diagnostics, automatic test discovery without naming conventions, and seamless async/await integration.
-
-**Example**:
+| Feature | XCTest | Swift Testing |
+|---------|--------|---------------|
+| Test declaration | `func test*()` | `@Test func name()` |
+| Assertions | `XCTAssert*` (40+ functions) | `#expect` and `#require` |
+| Parallelization | Multiple simulator processes | In-process via Swift Concurrency |
+| Parameterized tests | Manual loops | Built-in `arguments:` parameter |
 
 ```swift
 import Testing
 
-@Test("SessionStore appends events correctly")
-func sessionStoreAppend() async {
-    let store = SessionStore()
-    let event = SessionEvent(type: .messageReceived, timestamp: Date())
-
-    await store.append(event)
-    let events = await store.allEvents()
-
-    #expect(events.count == 1)
-    #expect(events.first?.type == .messageReceived)
+@Test("Check video metadata", .tags(.metadata))
+func videoMetadata() {
+    let video = Video(fileName: "By the Lake.mov")
+    #expect(video.metadata.duration == .seconds(90))
 }
 
-// Parameterized tests
-@Test("Connection status transitions", arguments: [
-    (ConnectionStatus.disconnected, ConnectionStatus.connecting),
-    (ConnectionStatus.connecting, ConnectionStatus.connected),
-    (ConnectionStatus.connected, ConnectionStatus.disconnected)
-])
-func connectionTransitions(from: ConnectionStatus, to: ConnectionStatus) async {
-    let store = SessionStore()
-    await store.updateStatus(to)
-    let status = await store.connectionStatus
-    #expect(status == to)
+// Parameterized testing
+@Test("Continents mentioned", arguments: ["A Beach", "By the Lake"])
+func mentionedContinents(videoName: String) async throws {
+    let video = try #require(await library.video(named: videoName))
+    #expect(video.mentionedContinents.count <= 3)
 }
 ```
 
-**Anti-pattern (XCTest Legacy)**:
+### Testing async code and actors
 
 ```swift
-// ❌ Legacy XCTest approach
-class SessionStoreTests: XCTestCase {
-    func testAppendEvent() {
-        XCTAssertEqual(events.count, 1)
-        XCTAssertNotNil(events.first)
-        XCTAssertTrue(events.first?.type == .messageReceived)
+@Test func openURL() async {
+    await confirmation { confirm in
+        let viewModel = ViewModel(onOpenURL: { _ in confirm() })
+        await viewModel.didTap(URL(string: "https://example.com")!)
     }
 }
 ```
 
-### Test actors with async test functions and @MainActor
+### Mocking without frameworks
 
-**Rule**: Mark test functions as `async` and use `await` when accessing actor-isolated properties; use `@MainActor` attribute when testing UI-related code.
-
-**Example**:
+Protocol-based mocking is the Swift-native approach:
 
 ```swift
-@Test @MainActor
-func viewModelLoadsMessages() async {
-    let viewModel = OverlayViewModel()
-    await viewModel.loadMessages()
-
-    #expect(viewModel.messages.isEmpty == false)
-    #expect(viewModel.connectionStatus == .connected)
+protocol HTTPClientable {
+    func get(_ path: String) -> Data
 }
 
-// Using confirmation for event-based testing
-@Test("Socket emits 10 events")
-func socketEventCount() async {
-    let socket = MockSocket()
+class MockHTTPClient: HTTPClientable {
+    private(set) var lastPath: String?
+    var dataToReturn: Data = Data()
 
-    await confirmation(expectedCount: 10) { confirm in
-        for await _ in socket.eventStream() {
-            confirm()
-        }
+    func get(_ path: String) -> Data {
+        lastPath = path
+        return dataToReturn
     }
 }
-```
 
-### Test Combine publishers with continuations
-
-**Rule**: Use `withCheckedContinuation` to bridge Combine publishers to async tests.
-
-**Example**:
-
-```swift
-@Test("Publisher emits expected value")
-func publisherTest() async throws {
-    var cancellables: Set<AnyCancellable> = []
-    let repository = DataRepository()
-
-    await withCheckedContinuation { continuation in
-        repository.dataPublisher
-            .sink { data in
-                #expect(data != nil)
-                continuation.resume()
-            }
-            .store(in: &cancellables)
-    }
+@Test func fetchGame_buildsPath() {
+    let client = MockHTTPClient()
+    let service = BoardGameService(client: client)
+    _ = service.fetchGame(id: 42)
+    #expect(client.lastPath == "/games/42")
 }
 ```
 
 ---
 
-## 8. Build and distribution
+## API design follows official Swift guidelines
 
-macOS menu bar apps distributed outside the App Store require Developer ID signing, notarization, and typically use Sparkle for auto-updates.
+The Swift API Design Guidelines prioritize **clarity at the point of use** over brevity.
 
-### Sign with Developer ID and enable Hardened Runtime
-
-**Rule**: Sign with "Developer ID Application" certificate for macOS distribution outside the App Store; enable Hardened Runtime, which is required for notarization.
-
-**Build Settings**:
-
-- Code Signing Identity: `Developer ID Application`
-- Development Team: `[Your Team ID]`
-- Hardened Runtime: `YES`
-- Code Sign on Copy: `YES`
-
-**Entitlements** (for socket IPC and typical menu bar app needs):
-
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "...">
-<plist version="1.0">
-<dict>
-    <key>com.apple.security.app-sandbox</key>
-    <false/>
-    <key>com.apple.security.cs.allow-jit</key>
-    <true/>
-    <key>com.apple.security.cs.disable-library-validation</key>
-    <true/>
-</dict>
-</plist>
-```
-
-### Automate notarization with notarytool
-
-**Rule**: Use `xcrun notarytool` for notarization (altool was deprecated November 2023); store credentials in keychain for automation.
-
-**Example workflow**:
-
-```bash
-# Store credentials (one-time)
-xcrun notarytool store-credentials "notarization-profile" \
-    --apple-id "your@email.com" \
-    --team-id "TEAMID123" \
-    --password "app-specific-password"
-
-# Submit and wait
-xcrun notarytool submit MyApp.dmg \
-    --keychain-profile "notarization-profile" \
-    --wait
-
-# Staple the ticket
-xcrun stapler staple MyApp.dmg
-
-# Verify
-spctl --assess --type open --context context:primary-signature -v MyApp.dmg
-```
-
-### Integrate Sparkle 2 for auto-updates
-
-**Rule**: Use Sparkle 2 via Swift Package Manager; configure EdDSA signing; host appcast.xml on HTTPS.
-
-**Setup**:
-
-1. Add package: `https://github.com/sparkle-project/Sparkle`
-2. Generate EdDSA keys: `./bin/generate_keys`
-3. Configure Info.plist with `SUFeedURL` and `SUPublicEDKey`
-
-**SwiftUI Integration**:
+### Naming conventions enforce readability
 
 ```swift
-import Sparkle
+// Include words to avoid ambiguity
+employees.remove(at: x)        // ✅ Clear
+employees.remove(x)            // ❌ Ambiguous
 
-final class UpdaterViewModel: ObservableObject {
-    let updater: SPUUpdater
+// Name by role, not type
+var greeting = "Hello"         // ✅ Role-based
+var string = "Hello"           // ❌ Type-based
 
-    init() {
-        updater = SPUStandardUpdaterController(
-            startingUpdater: true,
-            updaterDelegate: nil,
-            userDriverDelegate: nil
-        ).updater
-    }
+// Mutating/non-mutating pairs
+x.sort()                       // Mutating
+z = x.sorted()                 // Non-mutating (-ed suffix)
+y.formUnion(z)                 // Mutating (form- prefix)
+x = y.union(z)                 // Non-mutating
+```
 
-    func checkForUpdates() {
-        updater.checkForUpdates()
-    }
+### `some` vs `any` usage criteria
+
+| Feature | `some` (Opaque) | `any` (Existential) |
+|---------|-----------------|---------------------|
+| Type preservation | Preserves concrete type | Type erasure |
+| Performance | Static dispatch | Dynamic dispatch + boxing |
+| Associated types | Full access | Limited |
+
+```swift
+// Use `some` for return types (better performance)
+func makeView(for farm: Farm) -> some View { FarmView(farm) }
+
+// Use `any` for heterogeneous collections
+var animals: [any Animal] = [cow, chicken, pig]
+
+// `some` as generic shorthand in parameters
+func feed(_ animal: some Animal) { ... }  // Equivalent to <T: Animal>
+```
+
+### Access control starts restrictive
+
+Start with `private`, open to `internal` as needed, use `public` only for external APIs, and reserve `open` for types designed for external subclassing.
+
+---
+
+## Security practices protect user data
+
+### Keychain for sensitive storage
+
+**Never use UserDefaults for secrets**—it stores unencrypted plists. Keychain provides hardware-backed encryption:
+
+```swift
+func saveToKeychain(key: String, data: Data) throws {
+    let query: [String: Any] = [
+        kSecClass as String: kSecClassGenericPassword,
+        kSecAttrService as String: Bundle.main.bundleIdentifier!,
+        kSecAttrAccount as String: key,
+        kSecValueData as String: data,
+        kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+    ]
+    SecItemDelete(query as CFDictionary)
+    let status = SecItemAdd(query as CFDictionary, nil)
+    guard status == errSecSuccess else { throw KeychainError.saveFailed }
+}
+```
+
+### CryptoKit for encryption
+
+```swift
+import CryptoKit
+
+// Symmetric encryption (AES-GCM)
+let key = SymmetricKey(size: .bits256)
+let sealedBox = try AES.GCM.seal(data, using: key)
+let decrypted = try AES.GCM.open(sealedBox, using: key)
+
+// Hashing
+let hash = SHA256.hash(data: data)
+```
+
+### Networking security essentials
+
+- **Always use HTTPS**—keep App Transport Security enabled
+- **Implement certificate pinning** for sensitive APIs
+- **Validate all input**—use parameterized queries to prevent injection
+- **Never hardcode secrets**—fetch from backend at runtime
+
+---
+
+## Swift Package Manager modernizes dependency management
+
+### Package.swift structure
+
+```swift
+// swift-tools-version: 6.1
+import PackageDescription
+
+let package = Package(
+    name: "MyLibrary",
+    platforms: [.iOS(.v16), .macOS(.v13)],
+    products: [
+        .library(name: "MyLibrary", targets: ["MyLibrary"]),
+    ],
+    dependencies: [
+        .package(url: "https://github.com/apple/swift-algorithms.git", from: "1.0.0"),
+    ],
+    targets: [
+        .target(
+            name: "MyLibrary",
+            dependencies: [.product(name: "Algorithms", package: "swift-algorithms")],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+    ]
+)
+```
+
+### Versioning best practices
+
+- **Use `from:` for external dependencies**—allows automatic patch/minor updates
+- **Never use `.exact()` for published packages**—causes dependency conflicts
+- **Commit Package.resolved** for reproducible builds
+- **Remove branch/revision dependencies before publishing**
+
+### Package traits enable optional features (Swift 6.1+)
+
+```swift
+traits: [
+    .default(enabledTraits: ["Logging"]),
+    .trait(name: "Metrics", enabledTraits: ["Logging"]),
+],
+targets: [
+    .target(
+        name: "MyLib",
+        dependencies: [
+            .product(name: "Logging", package: "swift-log",
+                    condition: .when(traits: ["Logging"]))
+        ]
+    )
+]
+```
+
+---
+
+## Cross-platform development expands Swift's reach
+
+### Vapor vs Hummingbird for server-side Swift
+
+| Aspect | Vapor | Hummingbird |
+|--------|-------|-------------|
+| Philosophy | Batteries-included | Minimal, modular |
+| Best for | Full-stack apps | APIs, microservices |
+| Ecosystem | Larger (Fluent ORM, Leaf) | Growing, integrates with Fluent |
+
+Vapor 5 (coming with Swift 6) rebuilds on structured concurrency with native Swift Service Lifecycle integration. Hummingbird 2.0 is already built entirely on modern async/await.
+
+### Platform conditionals
+
+```swift
+#if os(iOS)
+    import UIKit
+    typealias XColor = UIColor
+#elseif os(macOS)
+    import AppKit
+    typealias XColor = NSColor
+#elseif os(Linux)
+    // Linux-specific implementation
+#endif
+
+#if canImport(UIKit)
+    import UIKit
+#endif
+```
+
+### Embedded Swift for microcontrollers
+
+Embedded Swift (WWDC 2024) compiles Swift to standalone firmware for ARM Cortex-M and RISC-V microcontrollers. Apple uses it in the Secure Enclave Processor. It's a full-featured Swift subset without runtime reflection or existentials.
+
+---
+
+## Interoperability bridges Swift with C, C++, and Objective-C
+
+### C++ interop (Swift 5.9+)
+
+Enable in Package.swift: `.swiftSettings: [.interoperabilityMode(.Cxx)]`
+
+```swift
+import CxxLibrary
+
+let vec = std.vector<Int32>()
+vec.push_back(42)
+
+// Extend C++ types with Swift protocols
+extension std.vector: RandomAccessCollection {
+    public var startIndex: Int { 0 }
+    public var endIndex: Int { size() }
+}
+```
+
+Supported: `std::string`, `std::vector`, `std::unique_ptr`, constructors, operators. Not yet supported: r-value references, `std::function`, catching C++ exceptions.
+
+### Unsafe pointers require scope management
+
+```swift
+// ✅ Always use withUnsafe* closures
+var value = 42
+withUnsafePointer(to: &value) { ptr in
+    print(ptr.pointee)  // Valid only in this scope
 }
 
-@main
-struct MyMenuBarApp: App {
-    @StateObject var updaterViewModel = UpdaterViewModel()
+// ✅ Balance allocation/deallocation
+let ptr = UnsafeMutablePointer<Int>.allocate(capacity: 10)
+ptr.initialize(repeating: 0, count: 10)
+defer {
+    ptr.deinitialize(count: 10)
+    ptr.deallocate()
+}
 
-    var body: some Scene {
-        MenuBarExtra("MyApp", systemImage: "star") {
-            ContentView()
-        }
-        .menuBarExtraStyle(.window)
-        .commands {
-            CommandGroup(after: .appInfo) {
-                Button("Check for Updates...") {
-                    updaterViewModel.checkForUpdates()
-                }
-            }
-        }
-    }
+// ❌ Never return pointers from closure scope
+func bad() -> UnsafePointer<Int> {
+    var x = 42
+    return withUnsafePointer(to: &x) { $0 }  // UNDEFINED BEHAVIOR
 }
 ```
 
 ---
 
-## Legacy pattern reference
+## Macros generate code at compile time
 
-| Legacy Pattern | Modern Pattern (macOS 15+) |
-|----------------|---------------------------|
-| `ObservableObject` + `@Published` | `@Observable` macro |
-| `@StateObject` | `@State` with @Observable |
-| `@ObservedObject` | `let` or `@Bindable` |
-| `@EnvironmentObject` | `@Environment` |
-| Manual dispatch queue locks | Swift actors |
-| `DispatchQueue.main.async` | `@MainActor` isolation |
-| `XCTestCase` + `XCTAssert*` | `@Test` + `#expect` |
-| `XCTestExpectation` | `confirmation()` or continuations |
-| Fire-and-forget `Task {}` | Structured concurrency with `.task` |
-| `assign(to:on:)` | `assign(to: &$property)` |
-| Manual NSStatusItem | `MenuBarExtra` scene |
+Swift Macros (Swift 5.9) enable type-safe compile-time code generation via SwiftSyntax.
 
-## Conclusion
+### Freestanding vs attached macros
 
-Building modern macOS menu bar apps in Swift 5.9–6.x centers on **actor-isolated state stores** for thread-safe event handling, **@Observable** for efficient SwiftUI reactivity, and **structured concurrency** for predictable async lifecycles. The shift from ObservableObject to @Observable alone can dramatically reduce unnecessary view updates in real-time UIs.
+| Type | Syntax | Purpose |
+|------|--------|---------|
+| Freestanding expression | `#macroName()` | Returns a value |
+| Freestanding declaration | `#macroName` | Creates declarations |
+| Attached | `@MacroName` | Modifies/augments declarations |
 
-For socket-based IPC, wrapping GCD DispatchSource in AsyncStream bridges low-level I/O with structured concurrency's automatic cancellation. JSONL streaming via `FileHandle.bytes.lines` keeps memory bounded regardless of conversation history size.
+### @Observable is the most important macro
 
-The testing story has evolved significantly—Swift Testing's `@Test` and `#expect` macros provide cleaner async test code than XCTest, while `confirmation()` replaces XCTestExpectation for event-based assertions. Distribution outside the App Store requires Developer ID signing, notarization via `notarytool`, and Sparkle 2 integration for seamless auto-updates.
+```swift
+@Observable
+class ViewModel {
+    var count = 0           // Automatically tracked
+    @ObservationIgnored
+    var transient = ""      // Excluded from observation
+}
+```
 
-Key patterns to internalize: always validate actor state after suspension points (reentrancy), use task-caching to prevent duplicate async work, prefer `assign(to: &$property)` over `assign(to:on:)` to avoid retain cycles, and structure all concurrent work to support automatic cancellation when views disappear or the app terminates.
+### When to use macros vs alternatives
+
+Consider macros only when: eliminating **significant** boilerplate (10+ repetitions), needing **compile-time validation** with custom errors, or generating **type-specific code** that can't be generalized with generics or protocol extensions.
+
+**Prefer alternatives first**: functions, generics, protocol extensions, property wrappers, result builders, or derived conformances (`Codable`, `Equatable`).
+
+---
+
+## Quick reference: key decisions
+
+### Type selection matrix
+
+| Criteria | Struct | Class | Actor |
+|----------|--------|-------|-------|
+| Thread safety | Copy semantics | Manual sync | Built-in isolation |
+| Identity needed | No | Yes | Yes |
+| SwiftUI data | Simple values | `@Observable` | Not recommended |
+| Shared mutable state | No | Possible | Preferred |
+
+### Property wrapper selection (SwiftUI, iOS 17+)
+
+| Scenario | Wrapper |
+|----------|---------|
+| Own `@Observable` instance | `@State` |
+| Bind to parent's state | `@Binding` |
+| Create bindings from `@Observable` | `@Bindable` |
+| Access environment values | `@Environment` |
+
+### Concurrency decision tree
+
+```
+Need shared mutable state?
+├── No → Use struct (automatically Sendable if properties are)
+└── Yes → Can isolate to MainActor?
+    ├── Yes → Use @MainActor class (for ViewModels)
+    └── No → Use actor (for background state management)
+```
