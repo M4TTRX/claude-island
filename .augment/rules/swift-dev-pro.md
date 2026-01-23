@@ -3,798 +3,882 @@ type: "agent_requested"
 description: "Modern Swift Best Practices for macOS"
 ---
 
-# Swift 6+ Coding Guidelines and Best Practices (2025-2026)
+# Swift 6+ Modern Development Guidelines
 
-Swift 6 fundamentally changes how developers approach concurrency by enforcing **complete data-race safety at compile time**. This comprehensive guide covers modern Swift idioms across all major development domains, combining official Apple guidance with community consensus. The most important shift for existing codebases is adopting strict concurrency checking—start with `SWIFT_STRICT_CONCURRENCY=targeted` immediately, then migrate incrementally to Swift 6 language mode.
+**Swift 6.2 and latest Apple platforms deliver complete data-race safety, ownership semantics, and performance-oriented memory features that fundamentally change how Swift code should be written.** This guide covers bleeding-edge patterns for greenfield development targeting macOS 26+, iOS 26+, watchOS 12+, tvOS 26+, and visionOS 3+—no legacy compatibility concerns.
+
+The Swift 6 era introduces **compile-time data-race prevention** as the default, **typed throws** for exhaustive error handling, **non-copyable types** for resource management, and **Span/InlineArray** for systems programming. Combined with SwiftUI's `@Observable` macro and the Swift Testing framework, modern Swift development looks dramatically different from even two years ago.
 
 ---
 
-## Swift 6 language features transform concurrency safety
+## Swift 6 version roadmap and language features
 
-Swift 6, released at WWDC 2024, prioritizes **data isolation enforcement** over flashy new features. The compiler now catches concurrent access issues at compile time rather than runtime, eliminating entire categories of data race bugs.
+Swift 6's release cadence has delivered transformative features across three point releases, each unlocking capabilities previously impossible in the language.
 
-### Strict concurrency checking requires explicit safety
+### Version timeline and key features
 
-Global mutable state must now be explicitly protected. The compiler rejects patterns that were silently dangerous in Swift 5:
+| Version | Release | Headline Features |
+|---------|---------|-------------------|
+| Swift 6.0 | September 2024 | Complete data-race safety, typed throws, `Int128`/`UInt128`, non-copyable generics |
+| Swift 6.1 | March 2025 | `nonisolated` extensions, TaskGroup inference, package traits, trailing commas everywhere |
+| Swift 6.2 | September 2025 | Approachable concurrency, `@concurrent`, `Span`, `InlineArray`, strict memory safety mode |
+
+### Enabling Swift 6 language mode
+
+All new projects should use Swift 6 language mode, which enables complete concurrency checking by default:
 
 ```swift
-// ❌ Error in Swift 6: non-isolated global shared mutable state
-var logger = Logger(subsystem: "app", category: "Main")
-
-// ✅ Option 1: Make it immutable (preferred)
-let logger = Logger(subsystem: "app", category: "Main")
-
-// ✅ Option 2: Isolate to an actor
-@MainActor var logger = Logger(subsystem: "app", category: "Main")
-
-// ✅ Option 3: Unsafe opt-out (last resort)
-nonisolated(unsafe) var logger = Logger(subsystem: "app", category: "Main")
+// Package.swift
+// swift-tools-version: 6.0
+.target(
+    name: "MyTarget",
+    swiftSettings: [
+        .swiftLanguageMode(.v6),
+        .enableUpcomingFeature("StrictConcurrency")
+    ]
+)
 ```
 
-### Typed throws enables exhaustive error handling
+**Xcode Build Settings**: Set "Swift Language Version" to 6 and "Strict Concurrency Checking" to Complete.
 
-Swift 6 introduces typed throws (SE-0413), allowing functions to specify exact error types:
+### Typed throws transforms error handling
+
+Swift 6.0 introduces typed throws (SE-0413), enabling exhaustive error handling without type erasure:
 
 ```swift
-enum ValidationError: Error {
-    case emptyName
-    case nameTooShort(length: Int)
+enum NetworkError: Error {
+    case offline, timeout, invalidResponse(Int)
 }
 
-func validate(name: String) throws(ValidationError) {
-    guard !name.isEmpty else { throw .emptyName }
-    guard name.count > 2 else { throw .nameTooShort(length: name.count) }
+func fetchUser(id: String) throws(NetworkError) -> User {
+    guard isConnected else { throw .offline }
+    // Compiler enforces NetworkError is the only throwable type
 }
 
-do {
-    try validate(name: "Jo")
-} catch {
-    // 'error' is inferred as ValidationError—no type casting needed
-    switch error {
-    case .emptyName: print("Name cannot be empty")
-    case .nameTooShort(let len): print("Name too short: \(len)")
+func handleUser() {
+    do throws(NetworkError) {
+        let user = try fetchUser(id: "123")
+    } catch {
+        switch error {  // Exhaustive—no default needed
+        case .offline: showOfflineUI()
+        case .timeout: showRetry()
+        case .invalidResponse(let code): log("Error: \(code)")
+        }
     }
 }
 ```
 
-**Use typed throws** for internal code requiring exhaustive handling. **Use untyped throws** for public APIs where error types may evolve—the Swift Evolution authors explicitly recommend untyped throws for most scenarios.
+Use **typed throws for internal APIs** where exhaustive handling is valuable. Retain untyped `throws` for public library APIs where error types may evolve.
 
-### Non-copyable types enforce unique ownership
+---
 
-The `~Copyable` syntax (SE-0390) creates types that cannot be duplicated, perfect for unique resources:
+## Non-copyable types and ownership model
+
+Swift 6 fully realizes its ownership model with `~Copyable` types and explicit ownership modifiers—essential for resource management without reference counting overhead.
+
+### Ownership modifiers for function parameters
+
+| Modifier | Behavior | Use Case |
+|----------|----------|----------|
+| `borrowing` | Temporary read access | Reading without consuming |
+| `consuming` | Takes ownership, invalidates caller's copy | Finalizing resources |
+| `inout` | Temporary mutable access | In-place mutation |
 
 ```swift
 struct FileHandle: ~Copyable {
-    private var fd: Int32
+    private var descriptor: Int32
 
     init(path: String) throws {
-        fd = open(path, O_RDONLY)
-        guard fd >= 0 else { throw FileError.cannotOpen }
+        descriptor = open(path, O_RDONLY)
+        guard descriptor >= 0 else { throw FileError.cannotOpen }
     }
 
-    consuming func close() {
-        close(fd)
-        discard self  // Prevents deinit from running
-    }
+    deinit { close(descriptor) }
 
-    deinit { close(fd) }  // Guaranteed cleanup
+    borrowing func read() -> Data { /* read without consuming */ }
+    consuming func close() { /* takes ownership, file closed */ }
 }
 
-func useFile() {
-    let file = try! FileHandle(path: "data.txt")
-    processFile(file)  // Ownership transferred
-    // file.read()     // ❌ Error: 'file' already consumed
+func processFile() {
+    var handle = try! FileHandle(path: "/tmp/data")
+    let data = handle.read()    // borrowing—can still use handle
+    handle.close()              // consuming—handle now invalid
+    // handle.read()            // Compile error: handle consumed
 }
 ```
 
-### Migration strategy: incremental adoption
+### InlineArray for stack-allocated fixed-size arrays (Swift 6.2+)
 
-| Step | Action | Build Setting |
-|------|--------|---------------|
-| 1 | Enable upcoming features individually | `Swift Compiler > Upcoming Features` |
-| 2 | Set strict concurrency to "Targeted" | `SWIFT_STRICT_CONCURRENCY=targeted` |
-| 3 | Fix all warnings | — |
-| 4 | Set strict concurrency to "Complete" | `SWIFT_STRICT_CONCURRENCY=complete` |
-| 5 | Enable Swift 6 language mode | `SWIFT_VERSION=6` |
+`InlineArray` provides fixed-size, stack-allocated arrays with **20-30% performance improvement** in tight loops:
 
-**Start with your UI layer** (often simpler with `@MainActor` inference), then progress to business logic. Swift 6 is opt-in per module—dependencies can use different Swift versions without compatibility issues.
+```swift
+// Shorthand syntax (preferred)
+var pixels: [256 of UInt8] = .init(repeating: 0)
+var rgb: [3 of Float] = [1.0, 0.5, 0.0]
+
+// Initialization from closure
+var indices: [10 of Int] = .init { index in index * 2 }
+
+struct Particle {
+    var position: [3 of Float]  // x, y, z—no heap allocation
+    var velocity: [3 of Float]
+}
+```
+
+### Span for safe buffer access (Swift 6.2+)
+
+`Span<T>` provides a **non-owning, lifetime-safe view** into contiguous memory—the Swift equivalent of C++'s `std::span`:
+
+```swift
+func sum(of buffer: Span<Int>) -> Int {
+    var total = 0
+    for i in 0..<buffer.count {
+        total += buffer[i]  // Bounds-checked
+    }
+    return total
+}
+
+var array = [1, 2, 3, 4, 5]
+sum(of: array.span)  // Zero-copy, lifetime enforced at compile time
+```
+
+Span cannot escape its source's lifetime—the compiler prevents dangling pointer bugs entirely.
 
 ---
 
-## Concurrency patterns require understanding isolation boundaries
+## Concurrency and parallelism
 
-Swift 6.2 introduces "Approachable Concurrency" with **default main actor isolation** in new Xcode projects and `nonisolated(nonsending)` semantics for async functions. Understanding when to use actors, classes, and structs is critical.
+Swift 6 delivers **complete data-race safety at compile time**. The concurrency model now guarantees that concurrent code is free of data races before it ever runs.
 
-### Actor selection follows four conditions
+### Approachable concurrency in Swift 6.2
 
-Use an actor only when all four conditions are met:
-1. Non-Sendable mutable state exists
-2. State needs reference from multiple places
-3. Operations must be atomic
-4. Operations cannot run on an existing actor (like MainActor)
+Swift 6.2 introduces a **single-threaded-by-default** mode that makes concurrency opt-in rather than requiring escape hatches:
 
 ```swift
-// ✅ Actor: protects mutable shared state
-actor BankAccount {
-    private var balance: Double = 0
+// With -default-isolation MainActor enabled (Xcode 26 default)
+struct ImageCache {
+    static var cache: [URL: Image] = [:]  // Protected by MainActor automatically
 
-    func deposit(amount: Double) { balance += amount }
-
-    func withdraw(amount: Double) -> Bool {
-        guard balance >= amount else { return false }
-        balance -= amount
-        return true
+    static func load(from url: URL) async throws -> Image {
+        if let cached = cache[url] { return cached }
+        let image = try await fetchAndDecode(url)  // Runs on MainActor
+        cache[url] = image
+        return image
     }
-}
 
-// ❌ Don't use actors for stateless services
-actor NetworkClient {  // Wrong: no mutable state to protect
-    func fetch(url: URL) async throws -> Data { ... }
-}
-
-// ✅ Use struct instead
-struct NetworkClient: Sendable {
-    func fetch(url: URL) async throws -> Data { ... }
+    @concurrent  // Explicitly opt into background execution
+    static func fetchAndDecode(_ url: URL) async throws -> Image {
+        let (data, _) = try await URLSession.shared.data(from: url)
+        return Image(data: data)!
+    }
 }
 ```
 
-### Sendable conformance strategies determine thread safety
+The `@concurrent` attribute explicitly marks functions that should run on the global concurrent executor rather than inheriting the caller's isolation.
 
-| Type | Sendable Conformance |
-|------|---------------------|
-| Structs with Sendable properties | Implicit |
-| Enums with Sendable associated values | Implicit |
-| `final class` with immutable properties | Explicit `Sendable` |
-| Classes with internal synchronization | `@unchecked Sendable` (use cautiously) |
-| Actors | Automatic |
+### Actor isolation patterns
+
+Actors provide mutual exclusion without manual locking:
 
 ```swift
-// Swift 6+ with iOS 18: Use Mutex for true Sendable
+actor DataStore {
+    private var items: [Item] = []
+
+    func add(_ item: Item) {
+        items.append(item)  // Synchronous within actor
+    }
+
+    func getItems() -> [Item] { items }
+
+    nonisolated var description: String { "DataStore" }  // No isolation needed
+}
+
+// External access always requires await
+let store = DataStore()
+await store.add(newItem)
+let items = await store.getItems()
+```
+
+### Sendable conformance without escape hatches
+
+Swift 6 enforces `Sendable` strictly. Proper patterns:
+
+```swift
+// Value types are implicitly Sendable when all properties are Sendable
+struct UserData: Sendable {
+    let id: UUID
+    let name: String
+}
+
+// Reference types require final + immutable state
+final class Configuration: Sendable {
+    let apiKey: String
+    let baseURL: URL
+}
+
+// For mutable state, use actors instead of @unchecked Sendable
+actor Repository {
+    private var cache: [String: Data] = [:]
+    func get(_ key: String) -> Data? { cache[key] }
+    func set(_ key: String, value: Data) { cache[key] = value }
+}
+```
+
+### Synchronization module: Mutex and Atomic
+
+The `Synchronization` module (iOS 18+/macOS 15+) provides low-level primitives when actors add unwanted overhead:
+
+```swift
 import Synchronization
 
+final class ThreadSafeCounter: Sendable {
+    private let value = Atomic<Int>(0)
+
+    func increment() -> Int {
+        value.add(1, ordering: .relaxed)
+    }
+
+    func load() -> Int {
+        value.load(ordering: .relaxed)
+    }
+}
+
 final class ThreadSafeCache: Sendable {
-    private let cache = Mutex<[String: Sendable]>([:])
+    private let storage = Mutex<[String: Data]>([:])
 
-    func get(_ key: String) -> Sendable? {
-        cache.withLock { $0[key] }
+    subscript(key: String) -> Data? {
+        get { storage.withLock { $0[key] } }
+        set { storage.withLock { $0[key] = newValue } }
     }
 }
 ```
 
-**Never use `@unchecked Sendable`** just to silence warnings—only when you've implemented thread safety via locks, queues, or atomics.
-
-### MainActor isolation patterns for UI code
-
-```swift
-// Entire class isolated (recommended for ViewModels)
-@MainActor
-class ProfileViewModel {
-    var profile: Profile?
-
-    func loadData() async {
-        profile = await fetchProfile()  // Guaranteed main thread
-    }
-}
-
-// Explicit switching when needed
-func processData() async {
-    let result = await heavyComputation()  // Background
-    await MainActor.run {
-        self.label.text = result.description  // Main thread
-    }
-}
-```
-
-### Task cancellation requires cooperative checking
-
-Swift uses cooperative cancellation—tasks must explicitly check and respond:
-
-```swift
-func processItems(_ items: [Item]) async throws {
-    for item in items {
-        try Task.checkCancellation()  // Throws if cancelled
-        await process(item)
-    }
-}
-
-// For cleanup on cancellation
-func fetchWithCancellation() async throws -> Data {
-    var task: URLSessionDataTask?
-    return try await withTaskCancellationHandler {
-        try await withCheckedThrowingContinuation { continuation in
-            task = URLSession.shared.dataTask(with: url) { data, _, error in
-                if let data { continuation.resume(returning: data) }
-                else { continuation.resume(throwing: error ?? URLError(.unknown)) }
-            }
-            task?.resume()
-        }
-    } onCancel: {
-        task?.cancel()  // Propagate cancellation
-    }
-}
-```
+**Decision guide**: Use actors for async state management, `Mutex` when synchronous access is required, and `Atomic` for simple counters/flags with minimal contention.
 
 ---
 
-## Memory management leverages ownership modifiers
+## SwiftUI with @Observable (2025/26)
 
-Swift 5.9+ introduced explicit ownership control with `borrowing`, `consuming`, and `inout` modifiers that eliminate unnecessary ARC operations.
+The `@Observable` macro is now the **only recommended approach** for observable state in SwiftUI. It replaces `ObservableObject`, `@Published`, `@StateObject`, and `@ObservedObject` entirely.
 
-### Ownership modifiers optimize performance
+### State management hierarchy
 
-| Modifier | Semantics | Use Case |
-|----------|-----------|----------|
-| `borrowing` | Read-only access, caller retains ownership | Inspecting values |
-| `consuming` | Transfers ownership, caller cannot reuse | Initializers, final operations |
-| `inout` | Temporary write access | Mutation operations |
+| Property Wrapper | Purpose | When to Use |
+|-----------------|---------|-------------|
+| `@State` | View-owned source of truth | Local view state, including @Observable objects |
+| `@Binding` | Two-way connection to parent's state | Child views that modify parent state |
+| `@Environment` | App-wide shared state | Dependency injection, shared models |
+| `@Bindable` | Create bindings from @Observable | When mutating @Environment objects |
 
-```swift
-struct Message: ~Copyable {
-    var content: String
-
-    borrowing func peek() -> String { content }  // Read-only
-    consuming func send() { print(content) }     // Takes ownership
-}
-
-// Eliminates defensive copies for large types
-func process(_ data: borrowing LargeData) { /* no copy */ }
-```
-
-### Retain cycles require weak/unowned references
+### Modern observable pattern
 
 ```swift
-// Delegate pattern: always weak
-protocol DataManagerDelegate: AnyObject { }
-class DataManager {
-    weak var delegate: DataManagerDelegate?
-}
+import Observation
+import SwiftUI
 
-// Closure captures: use capture lists
-class ViewController {
-    var completionHandler: (() -> Void)?
-
-    func setup() {
-        completionHandler = { [weak self] in
-            guard let self else { return }
-            self.updateUI()
-        }
-    }
-}
-
-// Parent-child relationships: unowned when guaranteed valid
-class CreditCard {
-    unowned let customer: Customer  // Card can't exist without customer
-}
-```
-
-### Copy-on-write for custom large types
-
-```swift
-struct CopyOnWriteBox<T> {
-    private final class Ref<T> {
-        var value: T
-        init(_ value: T) { self.value = value }
-    }
-
-    private var ref: Ref<T>
-
-    var value: T {
-        get { ref.value }
-        set {
-            if !isKnownUniquelyReferenced(&ref) {
-                ref = Ref(newValue)  // Copy on mutation
-            } else {
-                ref.value = newValue  // Mutate in place
-            }
-        }
-    }
-}
-```
-
----
-
-## SwiftUI embraces @Observable for precise invalidation
-
-The `@Observable` macro (iOS 17+) replaces `ObservableObject` with property-level observation, dramatically improving performance.
-
-### @Observable eliminates unnecessary redraws
-
-```swift
-// Old pattern (ObservableObject)
-final class CounterViewModel: ObservableObject {
-    @Published var count = 0
-    @Published var unrelatedValue = 0  // Changes trigger ALL view updates
-}
-
-// New pattern (@Observable)
 @Observable
-final class CounterViewModel {
-    var count = 0
-    var unrelatedValue = 0  // Changes only affect views reading this property
-}
+final class UserViewModel {
+    var users: [User] = []
+    var isLoading = false
+    var errorMessage: String?
 
-struct CounterView: View {
-    @State var viewModel = CounterViewModel()  // Note: @State, not @StateObject
-
-    var body: some View {
-        Text("\(viewModel.count)")  // Only redraws when count changes
-    }
-}
-```
-
-### State management property wrapper selection
-
-| Wrapper | Use When | Owns Data? |
-|---------|----------|------------|
-| `@State` | View-local values OR `@Observable` ownership | Yes |
-| `@Binding` | Child needs read/write access to parent's state | No |
-| `@Environment` | System values or `@Observable` injection | No |
-| `@Bindable` | Creating bindings from `@Observable` properties | No |
-
-### NavigationStack with type-safe routes
-
-```swift
-enum Route: Hashable {
-    case detail(id: Int)
-    case settings
-    case profile(userId: String)
-}
-
-struct ContentView: View {
-    @State private var path = NavigationPath()
-
-    var body: some View {
-        NavigationStack(path: $path) {
-            HomeView()
-                .navigationDestination(for: Route.self) { route in
-                    switch route {
-                    case .detail(let id): DetailView(id: id)
-                    case .settings: SettingsView()
-                    case .profile(let userId): ProfileView(userId: userId)
-                    }
-                }
+    func loadUsers() async {
+        isLoading = true
+        defer { isLoading = false }
+        do {
+            users = try await UserService.fetchUsers()
+        } catch {
+            errorMessage = error.localizedDescription
         }
     }
 }
+
+struct UserListView: View {
+    @State private var viewModel = UserViewModel()
+
+    var body: some View {
+        List(viewModel.users) { user in
+            Text(user.name)
+        }
+        .overlay { if viewModel.isLoading { ProgressView() } }
+        .task { await viewModel.loadUsers() }
+    }
+}
 ```
 
-### Performance optimization techniques
+### @Bindable for environment mutations
 
-- **Use `let` instead of `var`** for constants—SwiftUI knows they won't change
-- **Extract subviews** to isolate redraws to specific components
-- **Use `LazyVStack`/`LazyHStack`** for large scrolling content
-- **Debug redraws** with `let _ = Self._printChanges()` in view body
-- **Avoid `AnyView`**—it erases type information and hurts diffing
+When an `@Environment` object needs to be mutated (e.g., in a form), create a `@Bindable` inside the body:
+
+```swift
+struct BookEditor: View {
+    @Environment(Book.self) private var book
+
+    var body: some View {
+        @Bindable var book = book  // Create bindable inside body
+        TextField("Title", text: $book.title)
+    }
+}
+```
+
+### iOS 26/macOS 26 SwiftUI additions
+
+- **Liquid Glass design system**: Automatic visual refresh with `.glassEffect()` modifier
+- **Native WebView**: `WebView(page)` for embedded web content
+- **Rich TextEditor**: `TextEditor(text: $attributedString)` supports `AttributedString`
+- **Tab roles**: `Tab("Search", systemImage: "magnifyingglass", role: .search)`
+- **3D Charts**: `Chart3D` with RealityKit integration
 
 ---
 
-## Architecture patterns adapt to modern Swift
-
-MVVM with `@Observable` has become the de facto standard, though alternatives like TCA serve specific needs.
+## Architecture patterns for Swift 6
 
 ### MVVM with @Observable
 
+The simplest production-ready architecture for most SwiftUI apps:
+
 ```swift
 @Observable
-class ProfileViewModel {
-    var profile: Profile?
-    var isLoading = false
+final class CounterViewModel {
+    var count = 0
 
-    func loadProfile() async {
-        isLoading = true
-        defer { isLoading = false }
-        profile = try? await ProfileService.fetch()
-    }
+    func increment() { count += 1 }
+    func decrement() { count -= 1 }
 }
 
-struct ProfileView: View {
-    @State var viewModel = ProfileViewModel()
+struct CounterView: View {
+    @State private var viewModel = CounterViewModel()
 
     var body: some View {
-        Group {
-            if viewModel.isLoading {
-                ProgressView()
-            } else if let profile = viewModel.profile {
-                ProfileContent(profile: profile)
+        VStack {
+            Text("\(viewModel.count)")
+            HStack {
+                Button("-") { viewModel.decrement() }
+                Button("+") { viewModel.increment() }
             }
         }
-        .task { await viewModel.loadProfile() }
     }
 }
 ```
 
-### Dependency injection without frameworks
+### The Composable Architecture (TCA) for complex apps
 
-SwiftLee's pattern mirrors SwiftUI's `@Environment`:
+TCA 1.23+ fully embraces Swift 6 with `@Reducer` and `@ObservableState`:
 
 ```swift
-protocol InjectionKey {
-    associatedtype Value
-    static var currentValue: Self.Value { get set }
-}
+import ComposableArchitecture
 
-@propertyWrapper
-struct Injected<T> {
-    private let keyPath: WritableKeyPath<InjectedValues, T>
-    var wrappedValue: T {
-        get { InjectedValues[keyPath] }
-        set { InjectedValues[keyPath] = newValue }
+@Reducer
+struct CounterFeature {
+    @ObservableState
+    struct State: Equatable {
+        var count = 0
     }
-    init(_ keyPath: WritableKeyPath<InjectedValues, T>) {
-        self.keyPath = keyPath
+
+    enum Action {
+        case increment, decrement
+    }
+
+    var body: some ReducerOf<Self> {
+        Reduce { state, action in
+            switch action {
+            case .increment: state.count += 1; return .none
+            case .decrement: state.count -= 1; return .none
+            }
+        }
     }
 }
 
-// Usage
-struct DataController {
-    @Injected(\.networkProvider) var networkProvider: NetworkProviding
-}
+struct CounterView: View {
+    let store: StoreOf<CounterFeature>
 
-// Testing
-InjectedValues[\.networkProvider] = MockedNetworkProvider()
+    var body: some View {
+        VStack {
+            Text("\(store.count)")
+            Button("-") { store.send(.decrement) }
+            Button("+") { store.send(.increment) }
+        }
+    }
+}
 ```
 
-### The Composable Architecture considerations
-
-TCA (Point-Free) excels for apps requiring **unidirectional data flow**, **strict architectural consistency**, and **exhaustive testing**. However, it has a steep learning curve and adds dependency on two maintainers. Consider TCA when you need cross-platform business logic (used by Arc browser) or complex state sharing across screens.
+**Use MVVM** for small-to-medium apps with straightforward state. **Use TCA** for large apps requiring rigorous testing, complex state management, or team scalability.
 
 ---
 
-## Testing shifts to Swift Testing framework
+## Swift Testing framework
 
-The new Swift Testing framework (`@Test`, `#expect`, `#require`) offers cleaner syntax and better async support than XCTest.
+Swift Testing (`@Test`, `@Suite`, `#expect`, `#require`) is the **primary testing framework** for all new Swift 6 code. It replaces XCTest for most use cases.
 
-### Swift Testing vs XCTest comparison
-
-| Feature | XCTest | Swift Testing |
-|---------|--------|---------------|
-| Test declaration | `func test*()` | `@Test func name()` |
-| Assertions | `XCTAssert*` (40+ functions) | `#expect` and `#require` |
-| Parallelization | Multiple simulator processes | In-process via Swift Concurrency |
-| Parameterized tests | Manual loops | Built-in `arguments:` parameter |
+### Core testing patterns
 
 ```swift
 import Testing
 
-@Test("Check video metadata", .tags(.metadata))
-func videoMetadata() {
-    let video = Video(fileName: "By the Lake.mov")
-    #expect(video.metadata.duration == .seconds(90))
-}
+@Suite("User Management")
+struct UserTests {
+    @Test("Creating a user sets properties correctly")
+    func userCreation() {
+        let user = User(name: "Alice", age: 30)
+        #expect(user.name == "Alice")
+        #expect(user.age == 30)
+    }
 
-// Parameterized testing
-@Test("Continents mentioned", arguments: ["A Beach", "By the Lake"])
-func mentionedContinents(videoName: String) async throws {
-    let video = try #require(await library.video(named: videoName))
-    #expect(video.mentionedContinents.count <= 3)
+    @Test("Age validation rejects invalid values", arguments: [
+        (age: 17, valid: false),
+        (age: 18, valid: true),
+        (age: 100, valid: true),
+        (age: 101, valid: false)
+    ])
+    func ageValidation(age: Int, valid: Bool) {
+        #expect(User.isValidAge(age) == valid)
+    }
+}
+```
+
+### #expect vs #require
+
+| Macro | Behavior | Use Case |
+|-------|----------|----------|
+| `#expect` | Records failure, **continues** test | Multiple assertions per test |
+| `#require` | Throws on failure, **stops** test | Preconditions, unwrapping optionals |
+
+```swift
+@Test func unwrappingWithRequire() throws {
+    let user = try #require(userStore.find(id: "123"))  // Stops if nil
+    #expect(user.isActive)  // Only runs if user found
+    #expect(user.permissions.contains(.admin))
 }
 ```
 
 ### Testing async code and actors
 
 ```swift
-@Test func openURL() async {
-    await confirmation { confirm in
-        let viewModel = ViewModel(onOpenURL: { _ in confirm() })
-        await viewModel.didTap(URL(string: "https://example.com")!)
+@Test func asyncDataLoading() async throws {
+    let viewModel = UserViewModel()
+    await viewModel.loadUsers()
+    #expect(!viewModel.users.isEmpty)
+}
+
+@Test @MainActor func mainActorTest() async {
+    let controller = ViewController()
+    await controller.refresh()
+    #expect(controller.data != nil)
+}
+```
+
+### Actor-based mocks for strict concurrency
+
+```swift
+actor MockUserService: UserServiceProtocol {
+    var fetchCallCount = 0
+    var usersToReturn: [User] = []
+
+    func fetchUsers() async throws -> [User] {
+        fetchCallCount += 1
+        return usersToReturn
     }
 }
-```
 
-### Mocking without frameworks
+@Test func viewModelCallsService() async {
+    let mock = MockUserService()
+    await mock.setUsers([User(name: "Test")])
 
-Protocol-based mocking is the Swift-native approach:
+    let viewModel = UserViewModel(service: mock)
+    await viewModel.loadUsers()
 
-```swift
-protocol HTTPClientable {
-    func get(_ path: String) -> Data
-}
-
-class MockHTTPClient: HTTPClientable {
-    private(set) var lastPath: String?
-    var dataToReturn: Data = Data()
-
-    func get(_ path: String) -> Data {
-        lastPath = path
-        return dataToReturn
-    }
-}
-
-@Test func fetchGame_buildsPath() {
-    let client = MockHTTPClient()
-    let service = BoardGameService(client: client)
-    _ = service.fetchGame(id: 42)
-    #expect(client.lastPath == "/games/42")
+    let count = await mock.fetchCallCount
+    #expect(count == 1)
 }
 ```
 
 ---
 
-## API design follows official Swift guidelines
+## Swift Package Manager
 
-The Swift API Design Guidelines prioritize **clarity at the point of use** over brevity.
-
-### Naming conventions enforce readability
+### Package.swift for Swift 6
 
 ```swift
-// Include words to avoid ambiguity
-employees.remove(at: x)        // ✅ Clear
-employees.remove(x)            // ❌ Ambiguous
-
-// Name by role, not type
-var greeting = "Hello"         // ✅ Role-based
-var string = "Hello"           // ❌ Type-based
-
-// Mutating/non-mutating pairs
-x.sort()                       // Mutating
-z = x.sorted()                 // Non-mutating (-ed suffix)
-y.formUnion(z)                 // Mutating (form- prefix)
-x = y.union(z)                 // Non-mutating
-```
-
-### `some` vs `any` usage criteria
-
-| Feature | `some` (Opaque) | `any` (Existential) |
-|---------|-----------------|---------------------|
-| Type preservation | Preserves concrete type | Type erasure |
-| Performance | Static dispatch | Dynamic dispatch + boxing |
-| Associated types | Full access | Limited |
-
-```swift
-// Use `some` for return types (better performance)
-func makeView(for farm: Farm) -> some View { FarmView(farm) }
-
-// Use `any` for heterogeneous collections
-var animals: [any Animal] = [cow, chicken, pig]
-
-// `some` as generic shorthand in parameters
-func feed(_ animal: some Animal) { ... }  // Equivalent to <T: Animal>
-```
-
-### Access control starts restrictive
-
-Start with `private`, open to `internal` as needed, use `public` only for external APIs, and reserve `open` for types designed for external subclassing.
-
----
-
-## Security practices protect user data
-
-### Keychain for sensitive storage
-
-**Never use UserDefaults for secrets**—it stores unencrypted plists. Keychain provides hardware-backed encryption:
-
-```swift
-func saveToKeychain(key: String, data: Data) throws {
-    let query: [String: Any] = [
-        kSecClass as String: kSecClassGenericPassword,
-        kSecAttrService as String: Bundle.main.bundleIdentifier!,
-        kSecAttrAccount as String: key,
-        kSecValueData as String: data,
-        kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
-    ]
-    SecItemDelete(query as CFDictionary)
-    let status = SecItemAdd(query as CFDictionary, nil)
-    guard status == errSecSuccess else { throw KeychainError.saveFailed }
-}
-```
-
-### CryptoKit for encryption
-
-```swift
-import CryptoKit
-
-// Symmetric encryption (AES-GCM)
-let key = SymmetricKey(size: .bits256)
-let sealedBox = try AES.GCM.seal(data, using: key)
-let decrypted = try AES.GCM.open(sealedBox, using: key)
-
-// Hashing
-let hash = SHA256.hash(data: data)
-```
-
-### Networking security essentials
-
-- **Always use HTTPS**—keep App Transport Security enabled
-- **Implement certificate pinning** for sensitive APIs
-- **Validate all input**—use parameterized queries to prevent injection
-- **Never hardcode secrets**—fetch from backend at runtime
-
----
-
-## Swift Package Manager modernizes dependency management
-
-### Package.swift structure
-
-```swift
-// swift-tools-version: 6.1
+// swift-tools-version: 6.0
 import PackageDescription
 
 let package = Package(
-    name: "MyLibrary",
-    platforms: [.iOS(.v16), .macOS(.v13)],
+    name: "MyPackage",
+    platforms: [.macOS(.v26), .iOS(.v26), .watchOS(.v12), .tvOS(.v26), .visionOS(.v3)],
     products: [
-        .library(name: "MyLibrary", targets: ["MyLibrary"]),
+        .library(name: "MyLibrary", targets: ["MyLibrary"])
+    ],
+    traits: [
+        .default(enabledTraits: ["FullFeatures"]),
+        .trait(name: "FullFeatures", description: "All features enabled"),
+        .trait(name: "Minimal", description: "Core only")
     ],
     dependencies: [
-        .package(url: "https://github.com/apple/swift-algorithms.git", from: "1.0.0"),
+        .package(url: "https://github.com/apple/swift-syntax", from: "509.0.0")
     ],
     targets: [
         .target(
             name: "MyLibrary",
-            dependencies: [.product(name: "Algorithms", package: "swift-algorithms")],
-            swiftSettings: [.swiftLanguageMode(.v6)]
+            dependencies: [
+                .target(name: "OptionalModule", condition: .when(traits: ["FullFeatures"]))
+            ],
+            swiftSettings: [
+                .swiftLanguageMode(.v6),
+                .define("FULL_FEATURES", .when(traits: ["FullFeatures"]))
+            ]
         ),
+        .macro(
+            name: "MyMacros",
+            dependencies: [
+                .product(name: "SwiftSyntaxMacros", package: "swift-syntax"),
+                .product(name: "SwiftCompilerPlugin", package: "swift-syntax")
+            ]
+        )
     ]
 )
 ```
 
-### Versioning best practices
+### Package traits (Swift 6.1+)
 
-- **Use `from:` for external dependencies**—allows automatic patch/minor updates
-- **Never use `.exact()` for published packages**—causes dependency conflicts
-- **Commit Package.resolved** for reproducible builds
-- **Remove branch/revision dependencies before publishing**
+Package traits enable conditional compilation without target proliferation:
 
-### Package traits enable optional features (Swift 6.1+)
+```bash
+swift build --traits FullFeatures
+swift build --disable-default-traits
+```
+
+### The `package` access level
+
+Share code between targets within a package without making it public:
 
 ```swift
-traits: [
-    .default(enabledTraits: ["Logging"]),
-    .trait(name: "Metrics", enabledTraits: ["Logging"]),
-],
-targets: [
-    .target(
-        name: "MyLib",
-        dependencies: [
-            .product(name: "Logging", package: "swift-log",
-                    condition: .when(traits: ["Logging"]))
-        ]
-    )
-]
+// In Utilities target
+package struct InternalHelper {
+    package func process() { }
+}
+
+// In Main target (same package)—accessible
+import Utilities
+let helper = InternalHelper()
+
+// Outside the package—not accessible
 ```
 
 ---
 
-## Cross-platform development expands Swift's reach
+## API design for Swift 6
 
-### Vapor vs Hummingbird for server-side Swift
+### Prefer `some` over `any`
 
-| Aspect | Vapor | Hummingbird |
-|--------|-------|-------------|
-| Philosophy | Batteries-included | Minimal, modular |
-| Best for | Full-stack apps | APIs, microservices |
-| Ecosystem | Larger (Fluent ORM, Leaf) | Growing, integrates with Fluent |
-
-Vapor 5 (coming with Swift 6) rebuilds on structured concurrency with native Swift Service Lifecycle integration. Hummingbird 2.0 is already built entirely on modern async/await.
-
-### Platform conditionals
+Use opaque types (`some`) by default; use existentials (`any`) only when heterogeneity is required:
 
 ```swift
-#if os(iOS)
-    import UIKit
-    typealias XColor = UIColor
-#elseif os(macOS)
-    import AppKit
-    typealias XColor = NSColor
+// ✅ some—single concrete type, better performance
+func makeShape() -> some Shape {
+    Circle(radius: 10)
+}
+
+// ✅ any—heterogeneous collection required
+var shapes: [any Shape] = [Circle(), Square(), Triangle()]
+
+// ✅ some with primary associated types
+func loadItems() -> some Collection<Item> {
+    [Item(), Item()]
+}
+```
+
+### Primary associated types in protocol design
+
+```swift
+// Primary associated types enable constrained opaque/existential usage
+protocol DataStore<Element> {
+    associatedtype Element: Identifiable & Sendable
+    func fetch() async throws -> [Element]
+}
+
+// Usage with some/any
+func loadUsers(from store: some DataStore<User>) async throws -> [User] {
+    try await store.fetch()
+}
+```
+
+### Parameter packs for variadic generics
+
+```swift
+// Eliminates overload explosion
+func process<each T>(_ items: repeat each T) {
+    // Handle arbitrary number of heterogeneous arguments
+}
+
+// Real-world: multiple parallel requests
+func query<each Payload>(
+    _ requests: repeat Request<each Payload>
+) async throws -> (repeat each Payload) {
+    // Execute all, return tuple of results
+}
+
+let (user, posts, settings) = try await query(
+    Request<User>(),
+    Request<[Post]>(),
+    Request<Settings>()
+)
+```
+
+---
+
+## Swift macros
+
+### Macro roles and when to use them
+
+| Role | Syntax | Protocol | Purpose |
+|------|--------|----------|---------|
+| Freestanding Expression | `#macro()` | `ExpressionMacro` | Returns a value |
+| Freestanding Declaration | `#macro` | `DeclarationMacro` | Creates declarations |
+| Peer | `@Macro` | `PeerMacro` | Adds sibling declarations |
+| Member | `@Macro` | `MemberMacro` | Adds members to types |
+| Accessor | `@Macro` | `AccessorMacro` | Adds get/set/willSet/didSet |
+| Extension | `@Macro` | `ExtensionMacro` | Adds protocol conformances |
+
+### Built-in macros to use
+
+- `@Observable` — SwiftUI observation (Observation framework)
+- `@Model` — SwiftData persistence
+- `@Test`, `@Suite`, `#expect`, `#require` — Swift Testing
+- `@DebugDescription` — Custom LLDB summaries
+
+### Recommended community macros
+
+| Library | Purpose |
+|---------|---------|
+| **CasePaths** | `@CasePathable` for enum key paths |
+| **MetaCodable** | Advanced Codable with custom keys, defaults |
+| **Spyable** | Generate test spies from protocols |
+| **MemberwiseInit** | Smart memberwise initializers |
+| **Power Assert** | Rich assertion output |
+
+---
+
+## Security best practices
+
+Swift 6's strict concurrency provides **thread safety by default**—the most significant security improvement in the language's history.
+
+### Keychain with modern APIs
+
+Use SwiftSecurity or similar wrappers for type-safe Keychain access:
+
+```swift
+import SwiftSecurity
+
+let keychain = Keychain.default
+
+// Store credentials
+try keychain.store("api-key-value", query: .credential(for: "OpenAI"))
+
+// Retrieve
+let token: String? = try keychain.retrieve(.credential(for: "OpenAI"))
+
+// Store CryptoKit keys
+let privateKey = P256.KeyAgreement.PrivateKey()
+try keychain.store(privateKey, query: .key(for: "UserKey"))
+
+// Secure Enclave keys
+let seKey = try SecureEnclave.P256.KeyAgreement.PrivateKey()
+try keychain.store(seKey, query: .key(for: "SecureKey"))
+```
+
+### CryptoKit patterns
+
+```swift
+import CryptoKit
+
+// Symmetric encryption with AES-GCM
+let key = SymmetricKey(size: .bits256)
+let sealed = try AES.GCM.seal(plaintext, using: key)
+let decrypted = try AES.GCM.open(sealed, using: key)
+
+// Key agreement with P256
+let privateKey = P256.KeyAgreement.PrivateKey()
+let sharedSecret = try privateKey.sharedSecretFromKeyAgreement(with: otherPublicKey)
+let derivedKey = sharedSecret.hkdfDerivedSymmetricKey(
+    using: SHA256.self, salt: salt, sharedInfo: Data(), outputByteCount: 32
+)
+
+// Digital signatures
+let signingKey = P256.Signing.PrivateKey()
+let signature = try signingKey.signature(for: data)
+let isValid = signingKey.publicKey.isValidSignature(signature, for: data)
+```
+
+### Type-safe input validation
+
+```swift
+struct ValidatedEmail {
+    let value: String
+    private init(_ email: String) { self.value = email }
+
+    static func validate(_ input: String) -> ValidatedEmail? {
+        let regex = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,64}/
+        guard input.wholeMatch(of: regex) != nil else { return nil }
+        return ValidatedEmail(input)
+    }
+}
+
+// API requires validated types—invalid data cannot reach business logic
+func createAccount(email: ValidatedEmail, password: ValidatedPassword) { }
+```
+
+---
+
+## Cross-platform and server-side Swift
+
+### Server frameworks for Swift 6
+
+**Hummingbird 2.x** (shipping now) and **Vapor 5** (upcoming) both embrace full structured concurrency:
+
+```swift
+// Hummingbird 2
+import Hummingbird
+
+let router = Router()
+router.get("hello") { _, _ in "Hello, Swift!" }
+
+let app = Application(
+    router: router,
+    configuration: .init(address: .hostname("0.0.0.0", port: 8080))
+)
+try await app.runService()
+```
+
+### Platform conditional compilation
+
+```swift
+#if os(macOS)
+import AppKit
+#elseif os(iOS) || os(tvOS)
+import UIKit
 #elseif os(Linux)
-    // Linux-specific implementation
+import FoundationNetworking  // Required for URLSession on Linux
 #endif
 
-#if canImport(UIKit)
-    import UIKit
+#if canImport(Combine)
+import Combine
 #endif
 ```
 
 ### Embedded Swift for microcontrollers
 
-Embedded Swift (WWDC 2024) compiles Swift to standalone firmware for ARM Cortex-M and RISC-V microcontrollers. Apple uses it in the Secure Enclave Processor. It's a full-featured Swift subset without runtime reflection or existentials.
+Swift 6 includes an experimental embedded mode for ARM/RISC-V targets with **kilobyte-sized binaries**:
+
+```bash
+swiftc -target armv6m-none-none-eabi \
+       -enable-experimental-feature Embedded \
+       -wmo input.swift -c -o output.o
+```
 
 ---
 
-## Interoperability bridges Swift with C, C++, and Objective-C
+## Foundation and standard library updates
+
+### Key additions by version
+
+| Feature | Swift Version | Deployment |
+|---------|---------------|------------|
+| `Int128`/`UInt128` | 6.0+ | All |
+| `Atomic`, `Mutex` | 6.0+ | iOS 18+/macOS 15+ |
+| Extended `nonisolated` | 6.1+ | All |
+| Package traits | 6.1+ | All |
+| `InlineArray` | 6.2+ | iOS 26+/macOS 26+ |
+| `Span` | 6.2+ | iOS 26+/macOS 26+ |
+| `@concurrent` | 6.2+ | iOS 26+/macOS 26+ |
+| Foundation Models | — | iOS 26+/macOS 26+ |
+
+### Modern date formatting
+
+```swift
+let date = Date.now
+
+// Component-based (locale-aware)
+date.formatted(.dateTime.day().month(.wide).year())  // "January 23, 2026"
+date.formatted(date: .long, time: .shortened)         // "January 23, 2026 at 10:30 AM"
+
+// SwiftUI integration
+Text(Date.now, format: .dateTime.month().day().year())
+```
+
+### Swift Regex
+
+```swift
+import RegexBuilder
+
+let pattern = Regex {
+    "Price: "
+    Capture { One(.localizedCurrency(code: "USD")) }
+}
+
+if let match = text.firstMatch(of: pattern) {
+    print("Found price: \(match.1)")
+}
+```
+
+---
+
+## Interoperability
 
 ### C++ interop (Swift 5.9+)
 
-Enable in Package.swift: `.swiftSettings: [.interoperabilityMode(.Cxx)]`
+Enable in Package.swift:
 
 ```swift
-import CxxLibrary
-
-let vec = std.vector<Int32>()
-vec.push_back(42)
-
-// Extend C++ types with Swift protocols
-extension std.vector: RandomAccessCollection {
-    public var startIndex: Int { 0 }
-    public var endIndex: Int { size() }
-}
+.target(
+    name: "MyTarget",
+    dependencies: ["CxxModule"],
+    swiftSettings: [.interoperabilityMode(.Cxx)]
+)
 ```
 
-Supported: `std::string`, `std::vector`, `std::unique_ptr`, constructors, operators. Not yet supported: r-value references, `std::function`, catching C++ exceptions.
+C++ classes import as Swift value types by default. Use `SWIFT_SHARED_REFERENCE` for reference-counted types:
 
-### Unsafe pointers require scope management
+```cpp
+#include <swift/bridging>
 
-```swift
-// ✅ Always use withUnsafe* closures
-var value = 42
-withUnsafePointer(to: &value) { ptr in
-    print(ptr.pointee)  // Valid only in this scope
-}
-
-// ✅ Balance allocation/deallocation
-let ptr = UnsafeMutablePointer<Int>.allocate(capacity: 10)
-ptr.initialize(repeating: 0, count: 10)
-defer {
-    ptr.deinitialize(count: 10)
-    ptr.deallocate()
-}
-
-// ❌ Never return pointers from closure scope
-func bad() -> UnsafePointer<Int> {
-    var x = 42
-    return withUnsafePointer(to: &x) { $0 }  // UNDEFINED BEHAVIOR
-}
+class ManagedResource {
+    // ...
+} SWIFT_SHARED_REFERENCE(retainResource, releaseResource);
 ```
+
+### Minimizing @objc
+
+Use `@objc` **only** when Objective-C runtime features are required:
+
+- `#selector` for target-action patterns
+- `@objc dynamic` for KVO
+- Protocol optional methods
+
+For modern code, prefer Swift closures and protocols without `@objc`.
 
 ---
 
-## Macros generate code at compile time
+## Quick reference: modern vs legacy patterns
 
-Swift Macros (Swift 5.9) enable type-safe compile-time code generation via SwiftSyntax.
-
-### Freestanding vs attached macros
-
-| Type | Syntax | Purpose |
-|------|--------|---------|
-| Freestanding expression | `#macroName()` | Returns a value |
-| Freestanding declaration | `#macroName` | Creates declarations |
-| Attached | `@MacroName` | Modifies/augments declarations |
-
-### @Observable is the most important macro
-
-```swift
-@Observable
-class ViewModel {
-    var count = 0           // Automatically tracked
-    @ObservationIgnored
-    var transient = ""      // Excluded from observation
-}
-```
-
-### When to use macros vs alternatives
-
-Consider macros only when: eliminating **significant** boilerplate (10+ repetitions), needing **compile-time validation** with custom errors, or generating **type-specific code** that can't be generalized with generics or protocol extensions.
-
-**Prefer alternatives first**: functions, generics, protocol extensions, property wrappers, result builders, or derived conformances (`Codable`, `Equatable`).
+| Category | Legacy (Avoid) | Modern (Use) |
+|----------|----------------|--------------|
+| Observable state | `ObservableObject` + `@Published` | `@Observable` macro |
+| View state | `@StateObject` | `@State` |
+| Passed objects | `@ObservedObject` | Plain property or `@Bindable` |
+| Environment | `@EnvironmentObject` | `@Environment(Type.self)` |
+| Navigation | `NavigationView` | `NavigationStack` |
+| Testing | XCTest | Swift Testing |
+| Previews | `PreviewProvider` | `#Preview` macro |
+| Error handling | Untyped `throws` | Typed `throws(ErrorType)` |
+| Concurrency | `DispatchQueue`, callbacks | `async`/`await`, actors |
+| Synchronization | `NSLock`, `DispatchSemaphore` | `Mutex`, `Atomic` |
 
 ---
 
-## Quick reference: key decisions
+## Conclusion
 
-### Type selection matrix
+Swift 6+ represents a maturation of the language where **safety is the default, not an opt-in**. Complete data-race prevention at compile time, typed error handling, and ownership semantics eliminate entire categories of bugs before code ever runs.
 
-| Criteria | Struct | Class | Actor |
-|----------|--------|-------|-------|
-| Thread safety | Copy semantics | Manual sync | Built-in isolation |
-| Identity needed | No | Yes | Yes |
-| SwiftUI data | Simple values | `@Observable` | Not recommended |
-| Shared mutable state | No | Possible | Preferred |
+For greenfield development on macOS 26+/iOS 26+, adopt these patterns immediately: use `@Observable` for all observable state, Swift Testing for all tests, typed throws for internal error handling, and actors for shared mutable state. The `Span` and `InlineArray` types unlock systems-programming performance while maintaining Swift's safety guarantees.
 
-### Property wrapper selection (SwiftUI, iOS 17+)
-
-| Scenario | Wrapper |
-|----------|---------|
-| Own `@Observable` instance | `@State` |
-| Bind to parent's state | `@Binding` |
-| Create bindings from `@Observable` | `@Bindable` |
-| Access environment values | `@Environment` |
-
-### Concurrency decision tree
-
-```
-Need shared mutable state?
-├── No → Use struct (automatically Sendable if properties are)
-└── Yes → Can isolate to MainActor?
-    ├── Yes → Use @MainActor class (for ViewModels)
-    └── No → Use actor (for background state management)
-```
+The result is code that is simultaneously **safer, faster, and more expressive** than what was possible in Swift 5—a rare combination that makes now an excellent time to start new Swift projects with these modern idioms.
