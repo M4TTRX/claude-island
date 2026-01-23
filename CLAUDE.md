@@ -4,101 +4,97 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-Claude Island is a macOS menu bar app that provides Dynamic Island-style notifications for Claude Code CLI sessions. It monitors sessions in real-time, displays permission approval prompts in the notch overlay, and renders chat history with markdown support.
+Claude Island is a macOS menu bar app that provides Dynamic Island-style notifications for Claude Code CLI sessions. It monitors Claude sessions via Unix domain sockets, displays real-time status in an animated notch overlay, and enables permission approvals without switching to the terminal.
 
-**Requirements:** macOS 15.6+, Xcode 16.x, Swift 5.9+
+**Requirements:** macOS 15.6+, Xcode 16.x, Swift 5.9+, [uv](https://docs.astral.sh/uv/) (Python package manager)
 
 ## Build Commands
 
 ```bash
-# Build release app (ad-hoc signed)
+# Build release app (ad-hoc signed, outputs to build/export/)
 ./scripts/build.sh
 
-# Build via xcodebuild directly
+# Build with Xcode directly
 xcodebuild -scheme ClaudeIsland -configuration Release build
 
-# Run pre-commit linters (SwiftFormat, SwiftLint, Ruff)
+# Run pre-commit linters (SwiftFormat, SwiftLint, Ruff, Shellcheck, Markdownlint)
 prek run --all-files
 
-# Create release DMG (after build)
-./scripts/create-release.sh --skip-notarization
+# Run specific linter
+swiftlint lint --strict ClaudeIsland/
+swiftformat --lint ClaudeIsland/
 ```
 
 ## Architecture
 
-### Event-Driven State Machine
+### State Management Pattern
 
-The app uses a unidirectional data flow pattern where all state mutations flow through a single `SessionStore` actor:
+All session state flows through `SessionStore` (actor-based singleton at `Services/State/SessionStore.swift`):
 
-- **`SessionStore`** (`Services/State/SessionStore.swift`): Central actor managing all session state. All mutations go through the `process(_ event: SessionEvent)` method. Uses `CurrentValueSubject` to publish state changes to SwiftUI views.
+- Single source of truth for all Claude sessions
+- Event-driven state machine: all mutations via `process(_ event:)` method
+- Publishes changes via Combine `sessionsPublisher`
+- 11+ event types: `hookReceived`, `permissionApproved`, `fileUpdated`, etc.
 
-- **`SessionEvent`** (`Models/SessionEvent.swift`): Typed enum representing all possible state mutations (hook received, permission approved/denied, file updated, etc.)
+### Concurrency Model (Swift 6)
 
-- **`SessionPhase`** (`Models/SessionPhase.swift`): Enum-based state machine representing UI phases (idle, processing, waitingForApproval, waitingForInput, compacting). Includes `canTransition(to:)` validation.
+The codebase uses **Swift 6 language mode with strict concurrency**:
 
-### Hook Communication System
+- `@MainActor` for UI classes: `AppDelegate`, `NotchViewModel`, all views
+- `actor` for background state: `SessionStore`, `SocketReconnectionManager`
+- `Sendable` conformance on all shared data: `SessionState`, `HookEvent`, models
+- Structured concurrency with async/await throughout
 
-Claude Island integrates with Claude Code via hooks installed in `~/.claude/hooks/`:
+### Key Services
 
-1. **Python Hook Script** (`Resources/claude-island-state.py`): Installed to `~/.claude/hooks/`. Sends session events to the app via Unix socket. For permission requests, waits for user decisions.
+| Service | Location | Purpose |
+|---------|----------|---------|
+| `HookSocketServer` | `Services/Hooks/` | Unix socket server at `~/.claude/hooks/socket` for real-time hook events |
+| `ClaudeSessionMonitor` | `Services/Session/` | Orchestrates session monitoring, file watching, JSONL parsing |
+| `SessionStore` | `Services/State/` | Central state actor, processes all events |
+| `NotchViewModel` | `UI/` | UI state: notch status, content types, geometry |
+| `TmuxSessionMatcher` | `Services/Tmux/` | Matches sessions to tmux targets for terminal focusing |
 
-2. **HookInstaller** (`Services/Hooks/HookInstaller.swift`): Auto-installs/updates the hook script and configures `~/.claude/settings.json` on app launch.
+### UI Architecture
 
-3. **HookSocketServer** (`Services/Hooks/HookSocketServer.swift`): Unix domain socket server at `/tmp/claude-island.sock`. Receives events from hooks and maintains open connections for permission request/response.
+- `@Observable` macro (not `ObservableObject`) for property-level observation
+- `NotchWindow` / `NotchWindowController` for custom notch-shaped window
+- `NotchView` as main animated overlay that expands from MacBook notch
+- Reusable components in `UI/Components/`: `ActionButton`, `MarkdownRenderer`, `StatusIcons`
 
-### JSONL Parsing & File Watching
+### Data Flow
 
-- **ConversationParser** (`Services/Session/ConversationParser.swift`): Parses Claude Code's JSONL conversation files. Supports incremental parsing to avoid re-reading entire files.
+```
+Hook Script → Unix Socket → HookSocketServer → SessionStore.process() → NotchViewModel → SwiftUI Views
+                                                       ↓
+JSONL Files → ConversationParser → SessionStore.process()
+```
 
-- **AgentFileWatcher** / **JSONLInterruptWatcher**: Monitor conversation files for changes to detect interrupts and `/clear` commands.
+### Key Models
 
-### UI Layer
+- `SessionState`: Core session data with state machine (`phase`: idle → processing → waiting → complete)
+- `HookEvent`: Socket messages with sessionID, cwd, event, status, tool info
+- `ChatMessage`: Parsed messages with blocks (text, toolUse, thinking)
+- `ToolTracker`: Unified tool execution tracking
 
-- **NotchWindow** / **NotchViewController**: Custom `NSPanel` subclass for the floating notch overlay that appears above other windows.
+## Swift Patterns
 
-- **NotchViewModel** (`Core/NotchViewModel.swift`): `@Observable` view model coordinating between `SessionStore` and SwiftUI views.
+Per `.augment/rules/swift-dev-pro.md`:
 
-- **Views**: `NotchView`, `ChatView`, `ClaudeInstancesView` - SwiftUI views for the overlay UI.
-
-### Key Patterns
-
-- Swift actors for thread-safe shared state (`SessionStore`, `ConversationParser`)
-- `@Observable` macro for SwiftUI view models (not `ObservableObject`)
-- `@MainActor` for UI-related code
-- Combine publishers bridged to SwiftUI via `sessionsPublisher`
-- Exponential backoff with jitter for socket reconnection
-
-## Coding Guidelines
-
-The project follows modern Swift 5.9-6.x patterns documented in `.augment/rules/swift-dev-pro.md`:
-
-- Use actors for shared mutable state, `@MainActor` for view models
-- Prefer `@Observable` with `@State` over `ObservableObject` with `@StateObject`
-- Use structured concurrency (`async let`, `TaskGroup`) over fire-and-forget tasks
-- Handle actor reentrancy defensively (validate state after `await`)
-- Use `AsyncStream` for bridging callback-based APIs to async/await
-
-The Python hook script follows Python 3.14+ patterns in `.augment/rules/python-314-pro.md`:
-
-- Type hints with `TypedDict`, `TypeIs`, `dataclass(slots=True, frozen=True)`
-- Pattern matching for event dispatch
-- Bracketless `except` for multiple exception types
+- **Value types by default**: Use structs unless reference semantics needed
+- **Explicit access control**: Start `private`, open as needed
+- **Actor selection**: Only when protecting non-Sendable mutable state shared across contexts
+- **`some` vs `any`**: Use `some` for returns (better performance), `any` for heterogeneous collections
 
 ## Linting Configuration
 
-Pre-commit hooks run:
+- **SwiftLint** (`.swiftlint.yml`): 70+ opt-in rules, strict mode
+- **SwiftFormat** (`.swiftformat`): Swift 5.9, 150 char lines, 4-space indent
+- **Ruff**: Python 3.14+ for hook scripts in `ClaudeIsland/Resources/`
 
-- **SwiftFormat** (0.55.3): Auto-formats Swift code
-- **SwiftLint** (0.57.1): 70+ lint rules in strict mode
-- **Ruff**: Lints/formats Python hook script
-- **Shellcheck**: Validates shell scripts
+## Dependencies (Swift Package Manager)
 
-## Key Files
-
-| File | Purpose |
-|------|---------|
-| `Services/State/SessionStore.swift` | Central state actor - start here to understand state flow |
-| `Services/Hooks/HookSocketServer.swift` | Socket server for hook communication |
-| `Resources/claude-island-state.py` | Python hook script sent to Claude Code |
-| `Core/NotchViewModel.swift` | Main UI view model |
-| `Models/SessionPhase.swift` | Phase state machine with transition validation |
+- `swift-markdown` - Markdown rendering
+- `Sparkle` - Auto-updates via appcast.xml
+- `OcclusionKit` - Notch occlusion detection
+- `Subprocess` - Process execution
