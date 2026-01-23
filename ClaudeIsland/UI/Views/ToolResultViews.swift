@@ -923,6 +923,12 @@ struct SimpleDiffView: View {
     var filename: String?
 
     var body: some View {
+        // Compute diff once per render pass (LCS is expensive)
+        let diff = self.computeDiffResult()
+        let diffLines = diff.lines
+        let hasMoreChanges = diff.hasMore
+        let hasLinesBefore = diffLines.first.map { $0.lineNumber > 1 } ?? false
+
         VStack(alignment: .leading, spacing: 0) {
             // Filename header
             if let name = filename {
@@ -942,7 +948,7 @@ struct SimpleDiffView: View {
             }
 
             // Top overflow indicator
-            if self.hasLinesBefore {
+            if hasLinesBefore {
                 Text("...")
                     .font(.system(size: 10, design: .monospaced))
                     .foregroundColor(.white.opacity(0.3))
@@ -957,9 +963,9 @@ struct SimpleDiffView: View {
             }
 
             // Diff lines
-            ForEach(Array(self.diffLines.enumerated()), id: \.offset) { index, line in
-                let isFirst = index == 0 && self.filename == nil && !self.hasLinesBefore
-                let isLast = index == self.diffLines.count - 1 && !self.hasMoreChanges
+            ForEach(Array(diffLines.enumerated()), id: \.offset) { index, line in
+                let isFirst = index == 0 && self.filename == nil && !hasLinesBefore
+                let isLast = index == diffLines.count - 1 && !hasMoreChanges
                 DiffLineView(
                     line: line.text,
                     type: line.type,
@@ -970,7 +976,7 @@ struct SimpleDiffView: View {
             }
 
             // Bottom overflow indicator
-            if self.hasMoreChanges {
+            if hasMoreChanges {
                 Text("...")
                     .font(.system(size: 10, design: .monospaced))
                     .foregroundColor(.white.opacity(0.3))
@@ -989,6 +995,13 @@ struct SimpleDiffView: View {
         let text: String
         let type: DiffLineType
         let lineNumber: Int
+    }
+
+    /// Cached diff computation result to avoid redundant LCS calculations
+    private struct DiffResult {
+        let lines: [DiffLine]
+        let hasMore: Bool
+        let totalChanges: Int
     }
 
     private struct DiffLineView: View {
@@ -1042,93 +1055,101 @@ struct SimpleDiffView: View {
         }
     }
 
-    /// Compute diff using LCS algorithm
-    private var diffLines: [DiffLine] {
-        let oldLines = self.oldString.components(separatedBy: "\n")
-        let newLines = self.newString.components(separatedBy: "\n")
+    /// Compute Longest Common Subsequence using space-optimized DP
+    /// Uses O(min(n,m)) space instead of O(n*m) by keeping only two rows
+    private static func computeLCS(_ oldLines: [String], _ newLines: [String]) -> [String] {
+        let rowCount = oldLines.count
+        let colCount = newLines.count
 
-        // Compute LCS to find matching lines
-        let lcs = self.computeLCS(oldLines, newLines)
+        // Early exit for empty inputs
+        guard rowCount > 0, colCount > 0 else { return [] }
 
+        // Space-optimized: only keep current and previous row
+        // Pre-allocate both rows
+        var prev = [Int](repeating: 0, count: colCount + 1)
+        var curr = [Int](repeating: 0, count: colCount + 1)
+
+        // Also track which elements are in LCS for backtracking
+        // Using a direction matrix for backtracking (0 = diagonal, 1 = up, 2 = left)
+        var directions = [[UInt8]](repeating: [UInt8](repeating: 0, count: colCount + 1), count: rowCount + 1)
+
+        for idx in 1 ... rowCount {
+            for jdx in 1 ... colCount {
+                if oldLines[idx - 1] == newLines[jdx - 1] {
+                    curr[jdx] = prev[jdx - 1] + 1
+                    directions[idx][jdx] = 0 // diagonal
+                } else if prev[jdx] > curr[jdx - 1] {
+                    curr[jdx] = prev[jdx]
+                    directions[idx][jdx] = 1 // up
+                } else {
+                    curr[jdx] = curr[jdx - 1]
+                    directions[idx][jdx] = 2 // left
+                }
+            }
+            swap(&prev, &curr)
+            // Reset curr for next iteration
+            for jdx in 0 ... colCount {
+                curr[jdx] = 0
+            }
+        }
+
+        // Backtrack using direction matrix
+        var lcs: [String] = []
+        lcs.reserveCapacity(prev[colCount])
+        var row = rowCount
+        var col = colCount
+        while row > 0 && col > 0 {
+            switch directions[row][col] {
+            case 0: // diagonal - match
+                lcs.append(oldLines[row - 1])
+                row -= 1
+                col -= 1
+            case 1: // up
+                row -= 1
+            default: // left
+                col -= 1
+            }
+        }
+
+        return lcs.reversed()
+    }
+
+    /// Compute diff using LCS algorithm - call once per render pass
+    private func computeDiffResult() -> DiffResult {
+        let oldLines = self.oldString.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        let newLines = self.newString.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+
+        // Compute LCS once
+        let lcs = Self.computeLCS(oldLines, newLines)
+        let totalChanges = (oldLines.count - lcs.count) + (newLines.count - lcs.count)
+
+        // Build diff lines (max 12)
         var result: [DiffLine] = []
+        result.reserveCapacity(min(12, totalChanges))
+
         var oldIdx = 0
         var newIdx = 0
         var lcsIdx = 0
 
         while oldIdx < oldLines.count || newIdx < newLines.count {
-            // Limit output
             if result.count >= 12 { break }
 
             let lcsLine = lcsIdx < lcs.count ? lcs[lcsIdx] : nil
 
             if oldIdx < oldLines.count && (lcsLine == nil || oldLines[oldIdx] != lcsLine) {
-                // Line in old but not in LCS - removed
                 result.append(DiffLine(text: oldLines[oldIdx], type: .removed, lineNumber: oldIdx + 1))
                 oldIdx += 1
             } else if newIdx < newLines.count && (lcsLine == nil || newLines[newIdx] != lcsLine) {
-                // Line in new but not in LCS - added
                 result.append(DiffLine(text: newLines[newIdx], type: .added, lineNumber: newIdx + 1))
                 newIdx += 1
             } else {
-                // Matching line in LCS - skip (context)
                 oldIdx += 1
                 newIdx += 1
                 lcsIdx += 1
             }
         }
 
-        return result
-    }
-
-    private var hasMoreChanges: Bool {
-        let oldLines = self.oldString.components(separatedBy: "\n")
-        let newLines = self.newString.components(separatedBy: "\n")
-        let lcs = self.computeLCS(oldLines, newLines)
-        let totalChanges = (oldLines.count - lcs.count) + (newLines.count - lcs.count)
-        return totalChanges > 12
-    }
-
-    /// Whether there are lines before the first diff line
-    private var hasLinesBefore: Bool {
-        guard let firstLine = diffLines.first else { return false }
-        return firstLine.lineNumber > 1
-    }
-
-    /// Compute Longest Common Subsequence of two string arrays
-    private func computeLCS(_ oldLines: [String], _ newLines: [String]) -> [String] {
-        let rowCount = oldLines.count
-        let colCount = newLines.count
-
-        // DP table
-        var dp = Array(repeating: Array(repeating: 0, count: colCount + 1), count: rowCount + 1)
-
-        for idx in 1 ... rowCount {
-            for jdx in 1 ... colCount {
-                if oldLines[idx - 1] == newLines[jdx - 1] {
-                    dp[idx][jdx] = dp[idx - 1][jdx - 1] + 1
-                } else {
-                    dp[idx][jdx] = max(dp[idx - 1][jdx], dp[idx][jdx - 1])
-                }
-            }
-        }
-
-        // Backtrack to find LCS
-        var lcs: [String] = []
-        var row = rowCount
-        var col = colCount
-        while row > 0 && col > 0 {
-            if oldLines[row - 1] == newLines[col - 1] {
-                lcs.append(oldLines[row - 1])
-                row -= 1
-                col -= 1
-            } else if dp[row - 1][col] > dp[row][col - 1] {
-                row -= 1
-            } else {
-                col -= 1
-            }
-        }
-
-        return lcs.reversed()
+        return DiffResult(lines: result, hasMore: totalChanges > 12, totalChanges: totalChanges)
     }
 }
 
