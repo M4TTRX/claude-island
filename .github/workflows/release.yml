@@ -2,7 +2,7 @@ name: Build and Release
 
 on:
   push:
-    tags: ['v*', '[0-9]*.[0-9]*.[0-9]*']
+    tags: ['[0-9]+.[0-9]+.[0-9]+']
   workflow_dispatch:
     inputs:
       version:
@@ -35,9 +35,11 @@ jobs:
         id: version
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+            VERSION="${{ github.event.inputs.version }}"
+            VERSION="${VERSION#v}"  # Strip leading v if present for consistency
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
           else
-            echo "version=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+            echo "version=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
           fi
 
       - name: Update Xcode project version and commit
@@ -163,7 +165,8 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ steps.version.outputs.version }}
+          tag_name: ${{ steps.version.outputs.version }}
+          name: v${{ steps.version.outputs.version }}
           files: releases/ClaudeIsland-${{ steps.version.outputs.version }}.dmg
           generate_release_notes: true
           body: |
@@ -266,7 +269,7 @@ jobs:
           client-payload: |
             {
               "version": "${{ needs.build.outputs.version }}",
-              "download_url": "https://github.com/engels74/claude-island/releases/download/v${{ needs.build.outputs.version }}/ClaudeIsland-${{ needs.build.outputs.version }}.dmg",
+              "download_url": "https://github.com/engels74/claude-island/releases/download/${{ needs.build.outputs.version }}/ClaudeIsland-${{ needs.build.outputs.version }}.dmg",
               "ed_signature": "${{ needs.build.outputs.ed_signature }}",
               "file_size": "${{ needs.build.outputs.dmg_size }}",
               "min_system_version": "${{ needs.build.outputs.min_system }}"
