@@ -58,6 +58,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         NSApplication.shared.setActivationPolicy(.accessory)
 
+        // Check accessibility permission on launch
+        self.checkAccessibilityPermission()
+
         self.windowManager = WindowManager()
         _ = self.windowManager?.setupNotchWindow()
 
@@ -86,6 +89,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Stop interrupt watchers
         InterruptWatcherManager.shared.stopAll()
+
+        // Stop accessibility permission monitoring
+        AccessibilityPermissionManager.shared.stopPeriodicMonitoring()
 
         self.updateCheckTimer?.invalidate()
         self.screenObserver = nil
@@ -118,5 +124,23 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         return true
+    }
+
+    private func checkAccessibilityPermission() {
+        let manager = AccessibilityPermissionManager.shared
+
+        if !manager.isAccessibilityEnabled {
+            logger.warning("Accessibility permission not granted on launch")
+
+            // Start periodic monitoring so UI updates when permission is granted
+            manager.startPeriodicMonitoring()
+
+            // Show explanatory alert after a brief delay to explain why permission is needed
+            // The alert offers "Open Settings" to guide users to grant permission
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(1.0))
+                manager.showPermissionAlert()
+            }
+        }
     }
 }

@@ -6,6 +6,7 @@
 //
 
 import AppKit
+import Combine
 import CoreGraphics
 import SwiftUI
 
@@ -74,6 +75,7 @@ struct NotchView: View {
                     .animation(.smooth, value: self.activityCoordinator.expandingActivity)
                     .animation(.smooth, value: self.hasPendingPermission)
                     .animation(.smooth, value: self.hasWaitingForInput)
+                    .animation(.smooth, value: self.accessibilityManager.isAccessibilityEnabled)
                     .animation(.spring(response: 0.3, dampingFraction: 0.5), value: self.isBouncing)
                     .contentShape(Rectangle())
                     .onHover { hovering in
@@ -94,7 +96,8 @@ struct NotchView: View {
         .onAppear {
             self.sessionMonitor.startMonitoring()
             // On non-notched devices, keep visible so users have a target to interact with
-            if !self.viewModel.hasPhysicalNotch {
+            // Also keep visible if accessibility permission is missing (show warning)
+            if !self.viewModel.hasPhysicalNotch || self.needsAccessibilityWarning {
                 self.isVisible = true
             }
         }
@@ -107,6 +110,21 @@ struct NotchView: View {
         .onChange(of: self.sessionMonitor.instances) { _, instances in
             self.handleProcessingChange()
             self.handleWaitingForInputChange(instances)
+        }
+        .onChange(of: self.accessibilityManager.isAccessibilityEnabled) { _, isEnabled in
+            // Keep notch visible while accessibility warning is shown
+            if !isEnabled {
+                self.isVisible = true
+                self.hideVisibilityTask?.cancel()
+            } else {
+                // Permission granted, trigger normal visibility logic
+                self.handleProcessingChange()
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            // Check accessibility permission when app becomes active
+            // Catches the case where user grants permission in System Settings
+            self.accessibilityManager.handleAppActivation()
         }
     }
 
@@ -129,6 +147,9 @@ struct NotchView: View {
 
     /// Singleton is @Observable, so SwiftUI automatically tracks property access
     private var activityCoordinator = NotchActivityCoordinator.shared
+
+    /// Singleton for accessibility permission state
+    private var accessibilityManager = AccessibilityPermissionManager.shared
 
     // Animation springs
     private let openAnimation = Animation.spring(response: 0.42, dampingFraction: 0.8, blendDuration: 0)
@@ -172,6 +193,11 @@ struct NotchView: View {
         self.activeSessions.count > 1
     }
 
+    /// Whether accessibility permission is missing (show warning icon)
+    private var needsAccessibilityWarning: Bool {
+        !self.accessibilityManager.isAccessibilityEnabled
+    }
+
     // MARK: - Sizing
 
     private var closedNotchSize: CGSize {
@@ -186,12 +212,15 @@ struct NotchView: View {
         // Permission indicator adds width on left side only
         let permissionIndicatorWidth: CGFloat = self.hasPendingPermission ? 18 : 0
 
+        // Accessibility warning indicator width
+        let accessibilityWarningWidth: CGFloat = self.needsAccessibilityWarning ? 18 : 0
+
         // Expand for processing activity
         if self.activityCoordinator.expandingActivity.show {
             switch self.activityCoordinator.expandingActivity.type {
             case .claude:
                 let baseWidth = 2 * max(0, self.closedNotchSize.height - 12) + 20
-                return baseWidth + permissionIndicatorWidth
+                return baseWidth + permissionIndicatorWidth + accessibilityWarningWidth
             case .none:
                 break
             }
@@ -199,18 +228,23 @@ struct NotchView: View {
 
         // Expand for pending permissions (left indicator) or waiting for input (checkmark on right)
         if self.hasPendingPermission {
-            return 2 * max(0, self.closedNotchSize.height - 12) + 20 + permissionIndicatorWidth
+            return 2 * max(0, self.closedNotchSize.height - 12) + 20 + permissionIndicatorWidth + accessibilityWarningWidth
         }
 
         // Waiting for input just shows checkmark on right, no extra left indicator
         if self.hasWaitingForInput {
-            return 2 * max(0, self.closedNotchSize.height - 12) + 20
+            return 2 * max(0, self.closedNotchSize.height - 12) + 20 + accessibilityWarningWidth
         }
 
         // Expand for multiple active sessions to accommodate session state dots
         // Uses symmetric expansion (sideWidth on both left and right) like processing
         if self.hasMultipleActiveSessions {
-            return 2 * max(0, self.closedNotchSize.height - 12) + 20
+            return 2 * max(0, self.closedNotchSize.height - 12) + 20 + accessibilityWarningWidth
+        }
+
+        // Expand just for accessibility warning (when no other activity)
+        if self.needsAccessibilityWarning {
+            return 2 * max(0, self.closedNotchSize.height - 12) + 20 + accessibilityWarningWidth
         }
 
         return 0
@@ -258,9 +292,9 @@ struct NotchView: View {
         self.activityCoordinator.expandingActivity.show && self.activityCoordinator.expandingActivity.type == .claude
     }
 
-    /// Whether to show the expanded closed state (processing, pending permission, or waiting for input)
+    /// Whether to show the expanded closed state (processing, pending permission, waiting for input, or accessibility warning)
     private var showClosedActivity: Bool {
-        self.isProcessing || self.hasPendingPermission || self.hasWaitingForInput || self.hasMultipleActiveSessions
+        self.isProcessing || self.hasPendingPermission || self.hasWaitingForInput || self.hasMultipleActiveSessions || self.needsAccessibilityWarning
     }
 
     private var sideWidth: CGFloat {
@@ -293,19 +327,25 @@ struct NotchView: View {
 
     @ViewBuilder private var headerRow: some View {
         HStack(spacing: 0) {
-            // Left side - crab + optional permission indicator (visible when processing, pending, or waiting for input)
+            // Left side - crab + optional indicators (visible when processing, pending, waiting for input, or accessibility warning)
             if self.showClosedActivity {
                 HStack(spacing: 4) {
                     ClaudeCrabIcon(size: 14, animateLegs: self.isProcessing)
                         .matchedGeometryEffect(id: "crab", in: self.activityNamespace, isSource: self.showClosedActivity)
 
-                    // Permission indicator only (amber) - waiting for input shows checkmark on right
+                    // Permission indicator (prompt) - waiting for input shows checkmark on right
                     if self.hasPendingPermission {
                         PermissionIndicatorIcon(size: 14, color: Color(red: 0.85, green: 0.47, blue: 0.34))
                             .matchedGeometryEffect(id: "status-indicator", in: self.activityNamespace, isSource: self.showClosedActivity)
                     }
+
+                    // Accessibility warning indicator (amber)
+                    if self.needsAccessibilityWarning {
+                        AccessibilityWarningIcon(size: 14, color: TerminalColors.amber)
+                    }
                 }
-                .frame(width: self.viewModel.status == .opened ? nil : self.sideWidth + (self.hasPendingPermission ? 18 : 0))
+                .frame(width: self.viewModel.status == .opened ? nil : self
+                    .sideWidth + (self.hasPendingPermission ? 18 : 0) + (self.needsAccessibilityWarning ? 18 : 0))
                 .padding(.leading, self.viewModel.status == .opened ? 8 : 0)
             }
 
@@ -456,7 +496,7 @@ struct NotchView: View {
                     try? await Task.sleep(for: .seconds(0.5))
                     guard !Task.isCancelled else { return }
                     if !self.isAnyProcessing && !self.hasPendingPermission && !self.hasWaitingForInput
-                        && !self.hasMultipleActiveSessions && self.viewModel.status == .closed {
+                        && !self.hasMultipleActiveSessions && !self.needsAccessibilityWarning && self.viewModel.status == .closed {
                         self.isVisible = false
                     }
                 }
@@ -482,7 +522,7 @@ struct NotchView: View {
                 try? await Task.sleep(for: .seconds(0.35))
                 guard !Task.isCancelled else { return }
                 if self.viewModel.status == .closed && !self.isAnyProcessing && !self.hasPendingPermission
-                    && !self.hasWaitingForInput && !self.hasMultipleActiveSessions
+                    && !self.hasWaitingForInput && !self.hasMultipleActiveSessions && !self.needsAccessibilityWarning
                     && !self.activityCoordinator.expandingActivity.show {
                     self.isVisible = false
                 }
