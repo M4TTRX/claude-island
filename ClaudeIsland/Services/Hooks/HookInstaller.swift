@@ -174,7 +174,8 @@ enum HookInstaller {
             hooks[event] = self.updateOrAddHookEntries(
                 existing: hooks[event] as? [[String: Any]],
                 config: config,
-                command: command
+                command: command,
+                eventName: event
             )
         }
 
@@ -211,43 +212,113 @@ enum HookInstaller {
         ]
     }
 
-    /// Update existing hook entries or add new ones
+    /// Update existing hook entries or add new ones, deduplicating claude-island entries by matcher
     private static func updateOrAddHookEntries(
         existing: [[String: Any]]?,
         config: [[String: Any]],
-        command: String
+        command: String,
+        eventName: String
     ) -> [[String: Any]] {
         guard var existingEvent = existing else {
             return config
         }
 
         // First, remove any legacy direct format entries (not wrapped in "hooks")
-        existingEvent.removeAll { entry in
-            self.isLegacyDirectEntry(entry)
-        }
+        existingEvent.removeAll { self.isLegacyDirectEntry($0) }
 
-        var updated = false
-        for i in existingEvent.indices {
-            var entry = existingEvent[i]
-            if var entryHooks = entry["hooks"] as? [[String: Any]] {
-                for j in entryHooks.indices {
-                    var hook = entryHooks[j]
-                    if let cmd = hook["command"] as? String,
-                       cmd.contains("claude-island-state.py") {
-                        hook["command"] = command
-                        entryHooks[j] = hook
-                        updated = true
-                    }
-                }
-                entry["hooks"] = entryHooks
-                existingEvent[i] = entry
+        // Deduplicate and update claude-island entries, preserving user hooks
+        let (updatedEntries, seenMatchers) = self.deduplicateClaudeIslandEntries(
+            in: existingEvent, command: command, eventName: eventName
+        )
+        existingEvent = updatedEntries
+
+        // Add any missing configurations (matchers not already present)
+        for configEntry in config {
+            let configMatcher = (configEntry["matcher"] as? String) ?? ""
+            if !seenMatchers.contains(configMatcher) {
+                existingEvent.append(configEntry)
             }
         }
 
-        if !updated {
-            existingEvent.append(contentsOf: config)
-        }
         return existingEvent
+    }
+
+    /// Deduplicate claude-island entries by matcher, merging user hooks from duplicates
+    /// Returns updated entries and set of seen matchers
+    private static func deduplicateClaudeIslandEntries(
+        in entries: [[String: Any]],
+        command: String,
+        eventName: String
+    ) -> ([[String: Any]], Set<String>) {
+        var result = entries
+        var matcherToFirstIndex: [String: Int] = [:]
+        var indicesToRemove = [Int]()
+
+        for i in result.indices {
+            guard var entryHooks = result[i]["hooks"] as? [[String: Any]],
+                  self.isClaudeIslandHookEntry(entryHooks)
+            else { continue }
+
+            let matcherKey = (result[i]["matcher"] as? String) ?? ""
+
+            if let firstIndex = matcherToFirstIndex[matcherKey] {
+                // Duplicate - merge user hooks into first entry, then mark for removal
+                self.mergeUserHooks(from: entryHooks, into: &result, at: firstIndex, eventName: eventName)
+                indicesToRemove.append(i)
+            } else {
+                // First occurrence - update command and track matcher
+                matcherToFirstIndex[matcherKey] = i
+                self.updateClaudeIslandCommand(in: &entryHooks, to: command)
+                result[i]["hooks"] = entryHooks
+            }
+        }
+
+        // Remove duplicates in reverse order to preserve indices
+        if !indicesToRemove.isEmpty {
+            logger.info("Removed \(indicesToRemove.count) duplicate claude-island hook entry(ies) from \(eventName)")
+            for index in indicesToRemove.reversed() {
+                result.remove(at: index)
+            }
+        }
+
+        return (result, Set(matcherToFirstIndex.keys))
+    }
+
+    /// Check if hooks array contains a claude-island hook
+    private static func isClaudeIslandHookEntry(_ hooks: [[String: Any]]) -> Bool {
+        hooks.contains { hook in
+            (hook["command"] as? String)?.contains("claude-island-state.py") == true
+        }
+    }
+
+    /// Merge non-claude-island hooks from source into the target entry
+    private static func mergeUserHooks(
+        from sourceHooks: [[String: Any]],
+        into entries: inout [[String: Any]],
+        at targetIndex: Int,
+        eventName: String
+    ) {
+        let userHooks = sourceHooks.filter { hook in
+            guard let cmd = hook["command"] as? String else { return true }
+            return !cmd.contains("claude-island-state.py")
+        }
+
+        guard !userHooks.isEmpty,
+              var targetHooks = entries[targetIndex]["hooks"] as? [[String: Any]]
+        else { return }
+
+        targetHooks.append(contentsOf: userHooks)
+        entries[targetIndex]["hooks"] = targetHooks
+        logger.info("Merged \(userHooks.count) user hook(s) from duplicate entry in \(eventName)")
+    }
+
+    /// Update claude-island command in hooks array
+    private static func updateClaudeIslandCommand(in hooks: inout [[String: Any]], to command: String) {
+        for j in hooks.indices {
+            if let cmd = hooks[j]["command"] as? String, cmd.contains("claude-island-state.py") {
+                hooks[j]["command"] = command
+            }
+        }
     }
 
     /// Check if entry is a legacy direct format (type: command at top level, not wrapped in hooks)
