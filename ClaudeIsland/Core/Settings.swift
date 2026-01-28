@@ -138,6 +138,8 @@ enum AppSettings {
 // MARK: - Color+Hex
 
 extension Color {
+    // MARK: Lifecycle
+
     init?(hex: String) {
         var hexSanitized = hex.trimmingCharacters(in: .whitespacesAndNewlines)
         hexSanitized = hexSanitized.replacingOccurrences(of: "#", with: "")
@@ -154,6 +156,12 @@ extension Color {
         self.init(red: red, green: green, blue: blue)
     }
 
+    init(hue: Double, saturation: Double, brightness: Double) {
+        self.init(NSColor(hue: hue, saturation: saturation, brightness: brightness, alpha: 1.0))
+    }
+
+    // MARK: Internal
+
     var hexString: String {
         guard let components = NSColor(self).usingColorSpace(.sRGB)?.cgColor.components,
               components.count >= 3
@@ -168,17 +176,14 @@ extension Color {
         return String(format: "%02X%02X%02X", red, green, blue)
     }
 
-    init(hue: Double, saturation: Double, brightness: Double) {
-        self.init(NSColor(hue: hue, saturation: saturation, brightness: brightness, alpha: 1.0))
-    }
-
     var hsbComponents: (hue: Double, saturation: Double, brightness: Double) {
         let nsColor = NSColor(self).usingColorSpace(.sRGB) ?? NSColor(self)
-        var h: CGFloat = 0
-        var s: CGFloat = 0
-        var b: CGFloat = 0
-        var a: CGFloat = 0
-        nsColor.getHue(&h, saturation: &s, brightness: &b, alpha: &a)
-        return (Double(h), Double(s), Double(b))
+        var hue: CGFloat = 0
+        var saturation: CGFloat = 0
+        var brightness: CGFloat = 0
+        // Alpha parameter required by NSColor API but unused for HSB conversion
+        var alpha: CGFloat = 0
+        nsColor.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: &alpha)
+        return (Double(hue), Double(saturation), Double(brightness))
     }
 }

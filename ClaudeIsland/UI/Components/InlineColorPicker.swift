@@ -10,12 +10,9 @@ import SwiftUI
 // MARK: - InlineColorPicker
 
 struct InlineColorPicker: View {
-    @Binding var selectedColor: Color
+    // MARK: Internal
 
-    @State private var hue: Double = 0
-    @State private var saturation: Double = 1
-    @State private var brightness: Double = 1
-    @State private var isUpdatingFromColor = false
+    @Binding var selectedColor: Color
 
     var body: some View {
         VStack(spacing: 8) {
@@ -59,6 +56,13 @@ struct InlineColorPicker: View {
         }
     }
 
+    // MARK: Private
+
+    @State private var hue: Double = 0
+    @State private var saturation: Double = 1
+    @State private var brightness: Double = 1
+    @State private var isUpdatingFromColor = false
+
     private func syncFromColor(_ color: Color) {
         let hsb = color.hsbComponents
         self.hue = hsb.hue
@@ -69,6 +73,7 @@ struct InlineColorPicker: View {
     private func updateColorFromHSB() {
         self.isUpdatingFromColor = true
         self.selectedColor = Color(hue: self.hue, saturation: self.saturation, brightness: self.brightness)
+        // Defer flag reset to next run loop iteration to prevent onChange feedback loops
         Task { @MainActor in
             self.isUpdatingFromColor = false
         }
@@ -78,9 +83,9 @@ struct InlineColorPicker: View {
 // MARK: - HueSlider
 
 struct HueSlider: View {
-    @Binding var hue: Double
+    // MARK: Internal
 
-    @State private var isDragging = false
+    @Binding var hue: Double
 
     var body: some View {
         GeometryReader { geometry in
@@ -106,15 +111,13 @@ struct HueSlider: View {
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
-                        self.isDragging = true
                         self.updateHue(from: value.location.x, width: geometry.size.width)
-                    }
-                    .onEnded { _ in
-                        self.isDragging = false
                     }
             )
         }
     }
+
+    // MARK: Private
 
     private var hueGradientColors: [Color] {
         (0 ... 12).map { Color(hue: Double($0) / 12.0, saturation: 1, brightness: 1) }
@@ -140,8 +143,6 @@ struct SaturationBrightnessPlane: View {
     let hue: Double
     @Binding var saturation: Double
     @Binding var brightness: Double
-
-    @State private var isDragging = false
 
     var body: some View {
         GeometryReader { geometry in
@@ -172,11 +173,7 @@ struct SaturationBrightnessPlane: View {
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
-                        self.isDragging = true
                         self.updateSaturationBrightness(from: value.location, size: geometry.size)
-                    }
-                    .onEnded { _ in
-                        self.isDragging = false
                     }
             )
         }

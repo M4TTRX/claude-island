@@ -130,8 +130,8 @@ struct NotchView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)
             .receive(on: DispatchQueue.main)) { _ in
-            self.clawdColor = AppSettings.clawdColor
-            self.clawdAlwaysVisible = AppSettings.clawdAlwaysVisible
+                self.clawdColor = AppSettings.clawdColor
+                self.clawdAlwaysVisible = AppSettings.clawdAlwaysVisible
         }
         .onChange(of: self.clawdAlwaysVisible) { _, newValue in
             if newValue {
