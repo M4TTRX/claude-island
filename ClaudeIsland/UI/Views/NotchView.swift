@@ -75,7 +75,7 @@ struct NotchView: View {
                     .animation(.smooth, value: self.activityCoordinator.expandingActivity)
                     .animation(.smooth, value: self.hasPendingPermission)
                     .animation(.smooth, value: self.hasWaitingForInput)
-                    .animation(.smooth, value: self.accessibilityManager.isAccessibilityEnabled)
+                    .animation(.smooth, value: self.accessibilityManager.shouldShowPermissionWarning)
                     .animation(.spring(response: 0.3, dampingFraction: 0.5), value: self.isBouncing)
                     .animation(.smooth, value: self.clawdAlwaysVisible)
                     .contentShape(Rectangle())
@@ -113,13 +113,13 @@ struct NotchView: View {
             self.handleProcessingChange()
             self.handleWaitingForInputChange(instances)
         }
-        .onChange(of: self.accessibilityManager.isAccessibilityEnabled) { _, isEnabled in
+        .onChange(of: self.accessibilityManager.shouldShowPermissionWarning) { _, shouldShow in
             // Keep notch visible while accessibility warning is shown
-            if !isEnabled {
+            if shouldShow {
                 self.isVisible = true
                 self.hideVisibilityTask?.cancel()
             } else {
-                // Permission granted, trigger normal visibility logic
+                // Warning dismissed, trigger normal visibility logic
                 self.handleProcessingChange()
             }
         }
@@ -213,7 +213,7 @@ struct NotchView: View {
 
     /// Whether accessibility permission is missing (show warning icon)
     private var needsAccessibilityWarning: Bool {
-        !self.accessibilityManager.isAccessibilityEnabled
+        self.accessibilityManager.shouldShowPermissionWarning
     }
 
     // MARK: - Sizing
