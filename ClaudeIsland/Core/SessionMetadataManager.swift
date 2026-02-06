@@ -50,6 +50,13 @@ final class SessionMetadataManager {
         self.saveNames()
     }
 
+    func clearMetadata(for sessionID: String) {
+        self.sessionColors.removeValue(forKey: sessionID)
+        self.sessionNames.removeValue(forKey: sessionID)
+        self.saveColors()
+        self.saveNames()
+    }
+
     // MARK: Private
 
     private let defaults = UserDefaults.standard

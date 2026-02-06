@@ -187,18 +187,15 @@ struct InstanceRow: View {
         self.metadataManager.name(for: self.session.sessionID) ?? self.session.displayTitle
     }
 
-    /// Whether we're showing the approval UI
     private var isWaitingForApproval: Bool {
         self.session.phase.isWaitingForApproval
     }
 
-    /// Whether the pending tool requires interactive input (not just approve/deny)
     private var isInteractiveTool: Bool {
-        guard let toolName = session.pendingToolName else { return false }
+        guard let toolName = self.session.pendingToolName else { return false }
         return toolName == "AskUserQuestion"
     }
 
-    /// Status text based on session phase (fallback when no message content)
     private var phaseStatusText: String {
         switch self.session.phase {
         case .processing: "Processing..."
@@ -212,7 +209,7 @@ struct InstanceRow: View {
 
     private var mainRow: some View {
         HStack(spacing: 0) {
-            if let color = metadataManager.color(for: session.sessionID) {
+            if let color = self.metadataManager.color(for: self.session.sessionID) {
                 RoundedRectangle(cornerRadius: 1.5)
                     .fill(color)
                     .frame(width: 3)
@@ -242,7 +239,7 @@ struct InstanceRow: View {
                                 .lineLimit(1)
                         }
 
-                        if let usage = session.usage {
+                        if let usage = self.session.usage {
                             Text(usage.formattedTotal)
                                 .font(.system(size: 10, weight: .medium, design: .monospaced))
                                 .foregroundColor(.white.opacity(0.4))
@@ -253,7 +250,7 @@ struct InstanceRow: View {
                         }
                     }
 
-                    if self.isWaitingForApproval, let toolName = session.pendingToolName {
+                    if self.isWaitingForApproval, let toolName = self.session.pendingToolName {
                         HStack(spacing: 4) {
                             Text(MCPToolFormatter.formatToolName(toolName))
                                 .font(.system(size: 11, weight: .medium, design: .monospaced))
@@ -263,23 +260,23 @@ struct InstanceRow: View {
                                     .font(.system(size: 11))
                                     .foregroundColor(.white.opacity(0.5))
                                     .lineLimit(1)
-                            } else if let input = session.pendingToolInput {
+                            } else if let input = self.session.pendingToolInput {
                                 Text(input)
                                     .font(.system(size: 11))
                                     .foregroundColor(.white.opacity(0.5))
                                     .lineLimit(1)
                             }
                         }
-                    } else if let role = session.lastMessageRole {
+                    } else if let role = self.session.lastMessageRole {
                         switch role {
                         case "tool":
                             HStack(spacing: 4) {
-                                if let toolName = session.lastToolName {
+                                if let toolName = self.session.lastToolName {
                                     Text(MCPToolFormatter.formatToolName(toolName))
                                         .font(.system(size: 11, weight: .medium, design: .monospaced))
                                         .foregroundColor(.white.opacity(0.5))
                                 }
-                                if let input = session.lastMessage {
+                                if let input = self.session.lastMessage {
                                     Text(input)
                                         .font(.system(size: 11))
                                         .foregroundColor(.white.opacity(0.4))
@@ -291,7 +288,7 @@ struct InstanceRow: View {
                                 Text("You:")
                                     .font(.system(size: 11, weight: .medium))
                                     .foregroundColor(.white.opacity(0.5))
-                                if let msg = session.lastMessage {
+                                if let msg = self.session.lastMessage {
                                     Text(msg)
                                         .font(.system(size: 11))
                                         .foregroundColor(.white.opacity(0.4))
@@ -299,14 +296,14 @@ struct InstanceRow: View {
                                 }
                             }
                         default:
-                            if let msg = session.lastMessage {
+                            if let msg = self.session.lastMessage {
                                 Text(msg)
                                     .font(.system(size: 11))
                                     .foregroundColor(.white.opacity(0.4))
                                     .lineLimit(1)
                             }
                         }
-                    } else if let lastMsg = session.lastMessage {
+                    } else if let lastMsg = self.session.lastMessage {
                         Text(lastMsg)
                             .font(.system(size: 11))
                             .foregroundColor(.white.opacity(0.4))

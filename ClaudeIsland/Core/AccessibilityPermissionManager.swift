@@ -36,25 +36,27 @@ final class AccessibilityPermissionManager {
     /// granted to the installed app don't apply. Suppress the misleading warning during development.
     var shouldShowPermissionWarning: Bool {
         #if DEBUG
-        return false
+            return false
         #else
-        return !self.isAccessibilityEnabled
+            return !self.isAccessibilityEnabled
         #endif
     }
 
     /// Check the current permission state
     func checkPermission() {
         let previousState = self.isAccessibilityEnabled
-        let newState = AXIsProcessTrusted()
+
+        // Debug builds from Xcode have different code signatures than release builds
+        // TCC permissions granted to the installed app don't apply to debug builds
+        // Suppress the warning during development since it's misleading
+        let newState = self.isDebugBuild ? true : AXIsProcessTrusted()
         self.isAccessibilityEnabled = newState
 
-        #if DEBUG
-        let isDebugBuild = true
-        #else
-        let isDebugBuild = false
-        #endif
         let bundlePath = Bundle.main.bundlePath
-        logger.info("Accessibility check: AXIsProcessTrusted() = \(newState), isDebugBuild = \(isDebugBuild), bundle: \(bundlePath, privacy: .public)")
+        logger
+            .info(
+                "Accessibility check: AXIsProcessTrusted() = \(AXIsProcessTrusted()), effective = \(newState), isDebugBuild = \(self.isDebugBuild), bundle: \(bundlePath, privacy: .public)"
+            )
 
         if previousState != newState {
             logger.warning("Accessibility permission CHANGED: \(previousState) -> \(newState)")
@@ -132,8 +134,8 @@ final class AccessibilityPermissionManager {
         alert.informativeText = """
         Claude Island needs Accessibility permission to:
 
-        • Monitor mouse position to show/hide the notch
-        • Pass clicks through to apps behind the notch
+        \u{2022} Monitor mouse position to show/hide the notch
+        \u{2022} Pass clicks through to apps behind the notch
 
         To grant permission:
         1. Click "Open Settings" below
@@ -199,6 +201,14 @@ final class AccessibilityPermissionManager {
 
     /// Current polling interval (tracks which mode we're in)
     @ObservationIgnored private var currentPollingInterval: TimeInterval = 0.5
+
+    /// Detect if running from Xcode's DerivedData (debug build)
+    /// Debug builds have different code signatures than release builds,
+    /// so TCC permissions granted to the installed app don't apply
+    private var isDebugBuild: Bool {
+        let bundlePath = Bundle.main.bundlePath
+        return bundlePath.contains("DerivedData") || bundlePath.contains("Build/Products/Debug")
+    }
 
     /// Adjust polling interval from fast to slow after the initial period
     private func adjustPollingIntervalIfNeeded() {
