@@ -29,12 +29,12 @@ actor ClaudeAPIService {
 
     static let shared = ClaudeAPIService()
 
-    func fetchUsage(sessionKey: String) async throws -> APIUsageResponse {
+    func fetchUsage(sessionKey: String) async throws(APIServiceError) -> APIUsageResponse {
         let orgID = try await fetchOrganizationID(sessionKey: sessionKey)
         return try await self.fetchUsageData(sessionKey: sessionKey, orgID: orgID)
     }
 
-    func fetchUsage(oauthToken: String) async throws -> APIUsageResponse {
+    func fetchUsage(oauthToken: String) async throws(APIServiceError) -> APIUsageResponse {
         guard let url = URL(string: self.oauthUsageURL) else {
             throw APIServiceError.invalidURL
         }
@@ -47,7 +47,15 @@ actor ClaudeAPIService {
         request.httpMethod = "GET"
         request.timeoutInterval = 30
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.data(for: request)
+        } catch is CancellationError {
+            throw APIServiceError.cancelled
+        } catch {
+            throw APIServiceError.invalidResponse
+        }
 
         guard let httpResponse = response as? HTTPURLResponse else {
             throw APIServiceError.invalidResponse
@@ -68,7 +76,7 @@ actor ClaudeAPIService {
     private let baseURL = "https://claude.ai/api"
     private let oauthUsageURL = "https://api.anthropic.com/api/oauth/usage"
 
-    private func fetchOrganizationID(sessionKey: String) async throws -> String {
+    private func fetchOrganizationID(sessionKey: String) async throws(APIServiceError) -> String {
         guard let url = URL(string: "\(self.baseURL)/organizations") else {
             throw APIServiceError.invalidURL
         }
@@ -79,7 +87,15 @@ actor ClaudeAPIService {
         request.httpMethod = "GET"
         request.timeoutInterval = 30
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.data(for: request)
+        } catch is CancellationError {
+            throw APIServiceError.cancelled
+        } catch {
+            throw APIServiceError.invalidResponse
+        }
 
         guard let httpResponse = response as? HTTPURLResponse else {
             throw APIServiceError.invalidResponse
@@ -117,7 +133,7 @@ actor ClaudeAPIService {
         return uuid
     }
 
-    private func fetchUsageData(sessionKey: String, orgID: String) async throws -> APIUsageResponse {
+    private func fetchUsageData(sessionKey: String, orgID: String) async throws(APIServiceError) -> APIUsageResponse {
         Self.logger.debug("Fetching usage data for org: \(orgID, privacy: .private)")
         guard let url = URL(string: "\(self.baseURL)/organizations/\(orgID)/usage") else {
             throw APIServiceError.invalidURL
@@ -132,7 +148,15 @@ actor ClaudeAPIService {
         request.httpMethod = "GET"
         request.timeoutInterval = 30
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.data(for: request)
+        } catch is CancellationError {
+            throw APIServiceError.cancelled
+        } catch {
+            throw APIServiceError.invalidResponse
+        }
 
         guard let httpResponse = response as? HTTPURLResponse else {
             throw APIServiceError.invalidResponse
@@ -148,7 +172,7 @@ actor ClaudeAPIService {
         return try self.parseUsageResponse(data)
     }
 
-    private func parseUsageResponse(_ data: Data) throws -> APIUsageResponse {
+    private func parseUsageResponse(_ data: Data) throws(APIServiceError) -> APIUsageResponse {
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             Self.logger.error("Failed to parse JSON from usage response")
             throw APIServiceError.parsingFailed
@@ -204,12 +228,13 @@ actor ClaudeAPIService {
 
 // MARK: - APIServiceError
 
-enum APIServiceError: Error, LocalizedError {
+enum APIServiceError: Error, LocalizedError, Sendable {
     case invalidURL
     case invalidResponse
     case httpError(statusCode: Int)
     case parsingFailed
     case unauthorized
+    case cancelled
 
     // MARK: Internal
 
@@ -225,6 +250,8 @@ enum APIServiceError: Error, LocalizedError {
             "Failed to parse response"
         case .unauthorized:
             "Unauthorized - session key may be expired"
+        case .cancelled:
+            "Request was cancelled"
         }
     }
 }
