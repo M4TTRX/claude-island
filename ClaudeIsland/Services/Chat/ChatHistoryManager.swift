@@ -11,13 +11,12 @@ import Observation
 /// Manager for chat history using modern @Observable macro for efficient SwiftUI updates.
 /// Subscribes to SessionStore's Combine publisher to receive session state changes.
 @Observable
-@MainActor
 final class ChatHistoryManager {
     // MARK: Lifecycle
 
     private init() {
-        self.sessionsTask = Task { [weak self] in
-            let stream = await SessionStore.shared.sessionsStream()
+        self.sessionsTask = Task(name: "chat-history-stream") { [weak self] in
+            let stream = SessionStore.shared.sessionsStream()
             for await sessions in stream {
                 self?.updateFromSessions(sessions)
             }
@@ -72,7 +71,7 @@ final class ChatHistoryManager {
     func clearHistory(for sessionID: String) {
         self.loadedSessions.remove(sessionID)
         self.histories.removeValue(forKey: sessionID)
-        Task {
+        Task(name: "clear-history") {
             await SessionStore.shared.process(.sessionEnded(sessionID: sessionID))
         }
     }
@@ -115,7 +114,7 @@ final class ChatHistoryManager {
 
 // MARK: - ChatHistoryItem
 
-struct ChatHistoryItem: Identifiable, Equatable, Sendable {
+nonisolated struct ChatHistoryItem: Identifiable, Equatable, Sendable {
     let id: String
     let type: ChatHistoryItemType
     let timestamp: Date
@@ -127,7 +126,7 @@ struct ChatHistoryItem: Identifiable, Equatable, Sendable {
 
 // MARK: - ChatHistoryItemType
 
-enum ChatHistoryItemType: Equatable, Sendable {
+nonisolated enum ChatHistoryItemType: Equatable, Sendable {
     case user(String)
     case assistant(String)
     case toolCall(ToolCallItem)
@@ -137,7 +136,7 @@ enum ChatHistoryItemType: Equatable, Sendable {
 
 // MARK: - ToolCallItem
 
-struct ToolCallItem: Equatable, Sendable {
+nonisolated struct ToolCallItem: Equatable, Sendable {
     let name: String
     let input: [String: String]
     var status: ToolStatus
@@ -189,7 +188,7 @@ struct ToolCallItem: Equatable, Sendable {
 
 // MARK: - ToolStatus
 
-enum ToolStatus: Sendable, CustomStringConvertible {
+nonisolated enum ToolStatus: Equatable, Sendable, CustomStringConvertible {
     case running
     case waitingForApproval
     case success
@@ -209,26 +208,10 @@ enum ToolStatus: Sendable, CustomStringConvertible {
     }
 }
 
-// MARK: Equatable
-
-/// Explicit nonisolated Equatable conformance to avoid actor isolation issues
-extension ToolStatus: Equatable {
-    nonisolated static func == (lhs: ToolStatus, rhs: ToolStatus) -> Bool {
-        switch (lhs, rhs) {
-        case (.running, .running): true
-        case (.waitingForApproval, .waitingForApproval): true
-        case (.success, .success): true
-        case (.error, .error): true
-        case (.interrupted, .interrupted): true
-        default: false
-        }
-    }
-}
-
 // MARK: - SubagentToolCall
 
 /// Represents a tool call made by a subagent (Task tool)
-struct SubagentToolCall: Equatable, Identifiable, Sendable {
+nonisolated struct SubagentToolCall: Equatable, Identifiable, Sendable {
     let id: String
     let name: String
     let input: [String: String]

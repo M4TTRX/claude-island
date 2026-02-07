@@ -42,7 +42,7 @@ actor SessionStore {
     // MARK: - Periodic Status Check (see SessionStore+PeriodicCheck.swift)
 
     var statusCheckTask: Task<Void, Never>?
-    let statusCheckIntervalNs: UInt64 = 3_000_000_000
+    let statusCheckInterval: Duration = .seconds(3)
 
     /// Create a new stream of session state changes.
     /// Yields the current sessions immediately, then yields on every subsequent state change.
@@ -53,9 +53,9 @@ actor SessionStore {
         // Set onTermination synchronously (before any Task) to avoid a race where
         // the stream terminates before registerContinuation installs the handler.
         continuation.onTermination = { [weak self] _ in
-            Task { await self?.removeContinuation(id: id) }
+            Task(name: "session-stream-deregister") { await self?.removeContinuation(id: id) }
         }
-        Task {
+        Task(name: "session-stream-register") {
             await self.registerContinuation(continuation, id: id)
         }
         return stream
@@ -162,8 +162,8 @@ actor SessionStore {
 
         // Schedule new debounced sync
         // Note: Actors maintain strong references during execution, so [weak self] is unnecessary
-        self.pendingSyncs[sessionID] = Task {
-            try? await Task.sleep(nanoseconds: self.syncDebounceNs)
+        self.pendingSyncs[sessionID] = Task(name: "file-sync") {
+            try? await Task.sleep(for: self.syncDebounce)
             guard !Task.isCancelled else { return }
 
             // Revalidate session still exists after sleep (actor reentrancy protection)
@@ -221,7 +221,7 @@ actor SessionStore {
     private var pendingSyncs: [String: Task<Void, Never>] = [:]
 
     /// Sync debounce interval (100ms)
-    private let syncDebounceNs: UInt64 = 100_000_000
+    private let syncDebounce: Duration = .milliseconds(100)
 
     // MARK: - Event Audit Trail
 
@@ -345,11 +345,11 @@ actor SessionStore {
                     var input: [String: String] = [:]
                     if let hookInput = event.toolInput {
                         for (key, value) in hookInput {
-                            if let str = value.value as? String {
+                            if let str = value.stringValue {
                                 input[key] = str
-                            } else if let num = value.value as? Int {
+                            } else if let num = value.intValue {
                                 input[key] = String(num)
-                            } else if let bool = value.value as? Bool {
+                            } else if let bool = value.boolValue {
                                 input[key] = bool ? "true" : "false"
                             }
                         }

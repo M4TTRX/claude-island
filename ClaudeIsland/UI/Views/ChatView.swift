@@ -6,7 +6,6 @@
 //
 
 import AppKit
-import Combine
 import os
 import SwiftUI
 
@@ -145,7 +144,7 @@ struct ChatView: View {
                 if wasWaiting && isNowProcessing {
                     // Scroll to bottom after permission accepted (with slight delay)
                     self.scrollToBottomTask?.cancel()
-                    self.scrollToBottomTask = Task {
+                    self.scrollToBottomTask = Task(name: "scroll-to-bottom") {
                         try? await Task.sleep(for: .seconds(0.3))
                         guard !Task.isCancelled else { return }
                         self.shouldScrollToBottom = true
@@ -157,7 +156,7 @@ struct ChatView: View {
             // Auto-focus input when tmux messaging becomes available
             if canSend && !self.isInputFocused {
                 self.focusInputTask?.cancel()
-                self.focusInputTask = Task {
+                self.focusInputTask = Task(name: "auto-focus-input") {
                     try? await Task.sleep(for: .seconds(0.1))
                     guard !Task.isCancelled else { return }
                     self.isInputFocused = true
@@ -167,7 +166,7 @@ struct ChatView: View {
         .onAppear {
             // Auto-focus input when chat opens and tmux messaging is available
             self.focusInputTask?.cancel()
-            self.focusInputTask = Task {
+            self.focusInputTask = Task(name: "focus-on-appear") {
                 try? await Task.sleep(for: .seconds(0.3))
                 guard !Task.isCancelled else { return }
                 if self.canSendMessages {
@@ -639,7 +638,7 @@ struct ChatView: View {
     }
 
     private func focusTerminal() {
-        Task {
+        Task(name: "focus-terminal") {
             if let pid = session.pid {
                 let success = await TerminalFocuser.shared.focusTerminal(forClaudePID: pid)
                 if success { return }
@@ -696,7 +695,7 @@ struct ChatView: View {
         }
 
         // Don't add to history here - it will be synced from JSONL when UserPromptSubmit event fires
-        Task {
+        Task(name: "send-message") {
             await self.sendToSession(messageToSend)
         }
     }
@@ -818,35 +817,26 @@ struct ProcessingIndicatorView: View {
     // MARK: Internal
 
     var body: some View {
-        HStack(alignment: .center, spacing: 6) {
-            ProcessingSpinner()
-                .frame(width: 6)
+        TimelineView(.periodic(from: .now, by: 0.4)) { context in
+            let dotCount = (Int(context.date.timeIntervalSinceReferenceDate / 0.4) % 3) + 1
+            HStack(alignment: .center, spacing: 6) {
+                ProcessingSpinner()
+                    .frame(width: 6)
 
-            Text(self.baseText + self.dots)
-                .font(.system(size: 13))
-                .foregroundColor(self.color)
+                Text(self.baseText + String(repeating: ".", count: dotCount))
+                    .font(.system(size: 13))
+                    .foregroundColor(self.color)
 
-            Spacer()
-        }
-        .onReceive(self.timer) { _ in
-            self.dotCount = (self.dotCount % 3) + 1
+                Spacer()
+            }
         }
     }
 
     // MARK: Private
 
-    @State private var dotCount = 1
-
-    /// @State ensures timer persists across view updates rather than being recreated
-    @State private var timer = Timer.publish(every: 0.4, on: .main, in: .common).autoconnect()
-
     private let baseTexts = ["Processing", "Working"]
     private let color = Color(red: 0.85, green: 0.47, blue: 0.34) // Claude orange
     private let baseText: String
-
-    private var dots: String {
-        String(repeating: ".", count: self.dotCount)
-    }
 }
 
 // MARK: - ToolCallView

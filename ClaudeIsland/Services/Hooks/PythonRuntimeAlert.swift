@@ -8,19 +8,16 @@
 import AppKit
 import os.log
 
-private let logger = Logger(subsystem: "com.engels74.ClaudeIsland", category: "PythonRuntimeAlert")
-
 // MARK: - PythonRuntimeAlert
 
 /// Handles user-facing alerts for Python runtime issues
-/// @MainActor ensures all UI operations happen on the main thread
-@MainActor
+/// MainActor (default) ensures all UI operations happen on the main thread
 enum PythonRuntimeAlert {
     // MARK: Internal
 
     /// Show alert when no suitable Python runtime is available
     static func showUnavailableAlert(reason: PythonRuntimeDetector.UnavailableReason) {
-        logger.warning("Showing Python runtime unavailable alert: \(String(describing: reason))")
+        self.logger.warning("Showing Python runtime unavailable alert: \(String(describing: reason))")
 
         let alert = NSAlert()
         alert.messageText = "Python Runtime Required"
@@ -44,6 +41,8 @@ enum PythonRuntimeAlert {
     }
 
     // MARK: Private
+
+    private nonisolated static let logger = Logger(subsystem: "com.engels74.ClaudeIsland", category: "PythonRuntimeAlert")
 
     private static func message(for reason: PythonRuntimeDetector.UnavailableReason) -> String {
         switch reason {

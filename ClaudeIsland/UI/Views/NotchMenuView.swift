@@ -12,8 +12,6 @@ import ServiceManagement
 @preconcurrency import Sparkle
 import SwiftUI
 
-private let logger = Logger(subsystem: "com.engels74.ClaudeIsland", category: "NotchMenuView")
-
 // MARK: - NotchMenuView
 
 struct NotchMenuView: View {
@@ -75,7 +73,7 @@ struct NotchMenuView: View {
                             self.launchAtLogin = true
                         }
                     } catch {
-                        logger.error("Failed to toggle launch at login: \(error.localizedDescription)")
+                        Self.logger.error("Failed to toggle launch at login: \(error.localizedDescription)")
                     }
                 }
 
@@ -95,7 +93,7 @@ struct NotchMenuView: View {
                         HookInstaller.uninstall()
                         self.hooksInstalled = false
                     } else {
-                        self.hookInstallTask = Task { @MainActor in
+                        self.hookInstallTask = Task(name: "install-hooks") { @MainActor in
                             await HookInstaller.installIfNeeded()
                             // Only update state if task wasn't cancelled
                             if !Task.isCancelled {
@@ -154,6 +152,8 @@ struct NotchMenuView: View {
     }
 
     // MARK: Private
+
+    private nonisolated static let logger = Logger(subsystem: "com.engels74.ClaudeIsland", category: "NotchMenuView")
 
     @State private var hooksInstalled = false
     @State private var launchAtLogin = false
@@ -698,7 +698,7 @@ struct TokenTrackingRow: View {
         .labelsHidden()
         .onChange(of: self.tokenMode) { _, newValue in
             AppSettings.tokenTrackingMode = newValue
-            Task {
+            Task(name: "token-refresh") {
                 await self.tokenTrackingManager.refresh()
             }
         }
@@ -715,7 +715,7 @@ struct TokenTrackingRow: View {
             .controlSize(.mini)
             .onChange(of: self.useCLIOAuth) { _, newValue in
                 AppSettings.tokenUseCLIOAuth = newValue
-                Task {
+                Task(name: "token-refresh") {
                     await self.tokenTrackingManager.refresh()
                 }
             }
@@ -731,7 +731,7 @@ struct TokenTrackingRow: View {
                         .font(.system(size: 11))
                         .onSubmit {
                             self.tokenTrackingManager.saveSessionKey(self.sessionKey.isEmpty ? nil : self.sessionKey)
-                            Task {
+                            Task(name: "token-refresh") {
                                 await self.tokenTrackingManager.refresh()
                             }
                         }
