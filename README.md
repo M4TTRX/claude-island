@@ -76,6 +76,8 @@ macOS prompts for access to **"Claude Code-credentials"** (the CLI's OAuth token
 
 Subsequent launches require no extra setup. Auto-updates via Sparkle work normally.
 
+**Permissions Questions?** Learn more about [why Claude Island needs accessibility and keychain permissions](https://deepwiki.com/search/is-claude-island-safe-to-use-i_b6aed731-54db-4ac4-89e5-7ce9ad984006).
+
 ### Alternative: Terminal Bypass
 
 If you prefer, you can skip the Gatekeeper steps above by removing the quarantine attribute:
