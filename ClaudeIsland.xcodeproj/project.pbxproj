@@ -287,7 +287,7 @@
 				CODE_SIGN_ENTITLEMENTS = ClaudeIsland/Resources/ClaudeIsland.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 202602071505;
+				CURRENT_PROJECT_VERSION = 202602121027;
 				DEVELOPMENT_TEAM = "";
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -301,7 +301,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.3.9;
+				MARKETING_VERSION = 1.3.10;
 				PRODUCT_BUNDLE_IDENTIFIER = com.engels74.ClaudeIsland;
 				PRODUCT_NAME = "Claude Island";
 				REGISTER_APP_GROUPS = YES;
@@ -322,7 +322,7 @@
 				CODE_SIGN_ENTITLEMENTS = ClaudeIsland/Resources/ClaudeIsland.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 202602071505;
+				CURRENT_PROJECT_VERSION = 202602121027;
 				DEVELOPMENT_TEAM = "";
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -336,7 +336,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.3.9;
+				MARKETING_VERSION = 1.3.10;
 				PRODUCT_BUNDLE_IDENTIFIER = com.engels74.ClaudeIsland;
 				PRODUCT_NAME = "Claude Island";
 				REGISTER_APP_GROUPS = YES;
