@@ -65,8 +65,8 @@ class NotchViewController: NSViewController {
                 // When closed, use the notch rect (or pill rect on non-notch displays)
                 let notchRect = geometry.deviceNotchRect
                 let screenWidth = geometry.screenRect.width
-                // Pill mode needs larger padding since the pill is smaller
-                let padX: CGFloat = geometry.isPillMode ? 15 : 10
+                // Pill mode needs larger padding since the pill width is content-driven
+                let padX: CGFloat = geometry.isPillMode ? 60 : 10
                 let padY: CGFloat = geometry.isPillMode ? 8 : 5
                 return CGRect(
                     x: (screenWidth - notchRect.width) / 2 - padX,

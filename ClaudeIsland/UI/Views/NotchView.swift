@@ -265,21 +265,73 @@ struct NotchView: View {
         }
     }
 
+    // MARK: - Pill Status Text
+
+    /// Attributed status for pill mode with distinct colors for running vs idle
+    private var pillStatusText: Text {
+        let running = sessionMonitor.instances.filter { $0.phase.isActive }.count
+        let idle = sessionMonitor.instances.count - running
+        var result = Text("")
+        if running > 0 {
+            result = result + Text("\(running) running").foregroundColor(.white)
+        }
+        if running > 0 && idle > 0 {
+            result = result + Text("  ").foregroundColor(.clear)
+        }
+        if idle > 0 {
+            result = result + Text("\(idle) idle").foregroundColor(.white.opacity(0.4))
+        }
+        return result
+    }
+
     // MARK: - Header Row (persists across states)
 
     @ViewBuilder
     private var headerRow: some View {
+        if isPillMode && viewModel.status != .opened {
+            // Pill mode: compact status line sized to content
+            pillClosedRow
+        } else {
+            notchHeaderRow
+        }
+    }
+
+    /// Pill closed state: [crab] [X running, Y idle] [spinner?]
+    @ViewBuilder
+    private var pillClosedRow: some View {
+        HStack(spacing: 10) {
+            ClaudeCrabIcon(size: 11, animateLegs: isAnyProcessing)
+                .matchedGeometryEffect(id: "crab", in: activityNamespace, isSource: viewModel.status != .opened)
+
+            pillStatusText
+                .font(.system(size: 11, weight: .medium))
+                .fixedSize()
+
+            if isProcessing || hasPendingPermission {
+                ProcessingSpinner()
+                    .matchedGeometryEffect(id: "spinner", in: activityNamespace, isSource: viewModel.status != .opened)
+                    .frame(width: 12, height: 12)
+            } else if hasWaitingForInput {
+                ReadyForInputIndicatorIcon(size: 12, color: TerminalColors.green)
+                    .matchedGeometryEffect(id: "spinner", in: activityNamespace, isSource: viewModel.status != .opened)
+            }
+        }
+        .padding(.horizontal, 12)
+    }
+
+    /// Original notch-mode header (or opened state header for both modes)
+    @ViewBuilder
+    private var notchHeaderRow: some View {
         HStack(spacing: 0) {
             // Left side - crab + optional permission indicator (visible when processing, pending, or waiting for input)
             if showClosedActivity {
-                let iconSize: CGFloat = isPillMode ? 11 : 14
                 HStack(spacing: 4) {
-                    ClaudeCrabIcon(size: iconSize, animateLegs: isProcessing)
+                    ClaudeCrabIcon(size: 14, animateLegs: isProcessing)
                         .matchedGeometryEffect(id: "crab", in: activityNamespace, isSource: showClosedActivity)
 
                     // Permission indicator only (amber) - waiting for input shows checkmark on right
                     if hasPendingPermission {
-                        PermissionIndicatorIcon(size: iconSize, color: Color(red: 0.85, green: 0.47, blue: 0.34))
+                        PermissionIndicatorIcon(size: 14, color: Color(red: 0.85, green: 0.47, blue: 0.34))
                             .matchedGeometryEffect(id: "status-indicator", in: activityNamespace, isSource: showClosedActivity)
                     }
                 }
@@ -293,13 +345,13 @@ struct NotchView: View {
                 openedHeaderContent
             } else if !showClosedActivity {
                 // Closed without activity: empty space
-                let inset: CGFloat = isPillMode ? 10 : 20
+                let inset: CGFloat = 20
                 Rectangle()
                     .fill(.clear)
                     .frame(width: closedNotchSize.width - inset)
             } else {
                 // Closed with activity: black spacer (with optional bounce)
-                let inset: CGFloat = isPillMode ? pillCornerRadius.closed : cornerRadiusInsets.closed.top
+                let inset: CGFloat = cornerRadiusInsets.closed.top
                 Rectangle()
                     .fill(.black)
                     .frame(width: closedNotchSize.width - inset + (isBouncing ? 16 : 0))

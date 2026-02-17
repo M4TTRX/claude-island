@@ -41,7 +41,7 @@ struct NotchGeometry: Sendable {
     /// Check if a point is in the notch area (with padding for easier interaction).
     /// Pill mode uses larger padding since the pill is smaller than the notch.
     func isPointInNotch(_ point: CGPoint) -> Bool {
-        let dx: CGFloat = isPillMode ? -15 : -10
+        let dx: CGFloat = isPillMode ? -60 : -10
         let dy: CGFloat = isPillMode ? -8 : -5
         return notchScreenRect.insetBy(dx: dx, dy: dy).contains(point)
     }
