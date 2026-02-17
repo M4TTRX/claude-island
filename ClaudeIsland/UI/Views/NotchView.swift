@@ -444,9 +444,62 @@ struct NotchView: View {
         }
     }
 
+    // MARK: - Pill Status Text
+
+    /// Attributed status for pill mode with distinct colors for running vs idle
+    private var pillStatusText: Text {
+        let running = sessionMonitor.instances.filter { $0.phase.isActive }.count
+        let idle = sessionMonitor.instances.count - running
+        var result = Text("")
+        if running > 0 {
+            result = result + Text("\(running) running").foregroundColor(.white)
+        }
+        if running > 0 && idle > 0 {
+            result = result + Text("  ").foregroundColor(.clear)
+        }
+        if idle > 0 {
+            result = result + Text("\(idle) idle").foregroundColor(.white.opacity(0.4))
+        }
+        return result
+    }
+
     // MARK: - Header Row (persists across states)
 
     private var headerRow: some View {
+        if isPillMode && viewModel.status != .opened {
+            // Pill mode: compact status line sized to content
+            pillClosedRow
+        } else {
+            notchHeaderRow
+        }
+    }
+
+    /// Pill closed state: [crab] [X running, Y idle] [spinner?]
+    @ViewBuilder
+    private var pillClosedRow: some View {
+        HStack(spacing: 10) {
+            ClaudeCrabIcon(size: 11, animateLegs: isAnyProcessing)
+                .matchedGeometryEffect(id: "crab", in: activityNamespace, isSource: viewModel.status != .opened)
+
+            pillStatusText
+                .font(.system(size: 11, weight: .medium))
+                .fixedSize()
+
+            if isProcessing || hasPendingPermission {
+                ProcessingSpinner()
+                    .matchedGeometryEffect(id: "spinner", in: activityNamespace, isSource: viewModel.status != .opened)
+                    .frame(width: 12, height: 12)
+            } else if hasWaitingForInput {
+                ReadyForInputIndicatorIcon(size: 12, color: TerminalColors.green)
+                    .matchedGeometryEffect(id: "spinner", in: activityNamespace, isSource: viewModel.status != .opened)
+            }
+        }
+        .padding(.horizontal, 12)
+    }
+
+    /// Original notch-mode header (or opened state header for both modes)
+    @ViewBuilder
+    private var notchHeaderRow: some View {
         HStack(spacing: 0) {
             // Left side - crab + optional indicators (only when minimized - when opened, crab moves to openedHeaderContent)
             if self.showClosedActivity && self.viewModel.status != .opened {
