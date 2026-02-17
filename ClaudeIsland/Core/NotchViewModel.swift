@@ -102,7 +102,8 @@ class NotchViewModel: ObservableObject {
         self.geometry = NotchGeometry(
             deviceNotchRect: deviceNotchRect,
             screenRect: screenRect,
-            windowHeight: windowHeight
+            windowHeight: windowHeight,
+            isPillMode: !hasPhysicalNotch
         )
         self.hasPhysicalNotch = hasPhysicalNotch
         setupEventHandlers()

@@ -9,10 +9,16 @@ import AppKit
 import CoreGraphics
 import SwiftUI
 
-// Corner radius constants
+// Corner radius constants for notch mode
 private let cornerRadiusInsets = (
     opened: (top: CGFloat(19), bottom: CGFloat(24)),
     closed: (top: CGFloat(6), bottom: CGFloat(14))
+)
+
+// Corner radius constants for pill mode (external displays without notch)
+private let pillCornerRadius = (
+    opened: CGFloat(20),
+    closed: CGFloat(12)
 )
 
 struct NotchView: View {
@@ -108,23 +114,24 @@ struct NotchView: View {
 
     // MARK: - Corner Radii
 
+    private var isPillMode: Bool { !viewModel.hasPhysicalNotch }
+
     private var topCornerRadius: CGFloat {
-        viewModel.status == .opened
+        if isPillMode {
+            return viewModel.status == .opened ? pillCornerRadius.opened : pillCornerRadius.closed
+        }
+        return viewModel.status == .opened
             ? cornerRadiusInsets.opened.top
             : cornerRadiusInsets.closed.top
     }
 
     private var bottomCornerRadius: CGFloat {
-        viewModel.status == .opened
+        if isPillMode {
+            return viewModel.status == .opened ? pillCornerRadius.opened : pillCornerRadius.closed
+        }
+        return viewModel.status == .opened
             ? cornerRadiusInsets.opened.bottom
             : cornerRadiusInsets.closed.bottom
-    }
-
-    private var currentNotchShape: NotchShape {
-        NotchShape(
-            topCornerRadius: topCornerRadius,
-            bottomCornerRadius: bottomCornerRadius
-        )
     }
 
     // Animation springs
@@ -137,6 +144,11 @@ struct NotchView: View {
         ZStack(alignment: .top) {
             // Outer container does NOT receive hits - only the notch content does
             VStack(spacing: 0) {
+                // In pill mode, add a top gap so the pill sits within the menu bar
+                if isPillMode {
+                    Spacer().frame(height: 5)
+                }
+
                 notchLayout
                     .frame(
                         maxWidth: viewModel.status == .opened ? notchSize.width : nil,
@@ -145,21 +157,27 @@ struct NotchView: View {
                     .padding(
                         .horizontal,
                         viewModel.status == .opened
-                            ? cornerRadiusInsets.opened.top
-                            : cornerRadiusInsets.closed.bottom
+                            ? (isPillMode ? pillCornerRadius.opened : cornerRadiusInsets.opened.top)
+                            : (isPillMode ? pillCornerRadius.closed : cornerRadiusInsets.closed.bottom)
                     )
                     .padding([.horizontal, .bottom], viewModel.status == .opened ? 12 : 0)
                     .background(.black)
-                    .clipShape(currentNotchShape)
+                    .clipShape(isPillMode
+                        ? AnyShape(PillShape(cornerRadius: viewModel.status == .opened ? pillCornerRadius.opened : pillCornerRadius.closed))
+                        : AnyShape(NotchShape(topCornerRadius: topCornerRadius, bottomCornerRadius: bottomCornerRadius))
+                    )
                     .overlay(alignment: .top) {
-                        Rectangle()
-                            .fill(.black)
-                            .frame(height: 1)
-                            .padding(.horizontal, topCornerRadius)
+                        // Top-edge line only needed in notch mode to blend with the physical notch
+                        if !isPillMode {
+                            Rectangle()
+                                .fill(.black)
+                                .frame(height: 1)
+                                .padding(.horizontal, topCornerRadius)
+                        }
                     }
                     .shadow(
-                        color: (viewModel.status == .opened || isHovering) ? .black.opacity(0.7) : .clear,
-                        radius: 6
+                        color: (viewModel.status == .opened || isHovering || isPillMode) ? .black.opacity(0.7) : .clear,
+                        radius: isPillMode && viewModel.status != .opened ? 4 : 6
                     )
                     .frame(
                         maxWidth: viewModel.status == .opened ? notchSize.width : nil,
@@ -190,9 +208,9 @@ struct NotchView: View {
         .preferredColorScheme(.dark)
         .onAppear {
             sessionMonitor.startMonitoring()
-            // On non-notched devices, keep visible so users have a target to interact with
+            // Pill mode: only show when there are active sessions
             if !viewModel.hasPhysicalNotch {
-                isVisible = true
+                isVisible = !sessionMonitor.instances.isEmpty
             }
         }
         .onChange(of: viewModel.status) { oldStatus, newStatus in
@@ -204,6 +222,12 @@ struct NotchView: View {
         .onChange(of: sessionMonitor.instances) { _, instances in
             handleProcessingChange()
             handleWaitingForInputChange(instances)
+            // Pill mode: show/hide based on active sessions
+            if !viewModel.hasPhysicalNotch && viewModel.status != .opened {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    isVisible = !instances.isEmpty
+                }
+            }
         }
     }
 
@@ -248,13 +272,14 @@ struct NotchView: View {
         HStack(spacing: 0) {
             // Left side - crab + optional permission indicator (visible when processing, pending, or waiting for input)
             if showClosedActivity {
+                let iconSize: CGFloat = isPillMode ? 11 : 14
                 HStack(spacing: 4) {
-                    ClaudeCrabIcon(size: 14, animateLegs: isProcessing)
+                    ClaudeCrabIcon(size: iconSize, animateLegs: isProcessing)
                         .matchedGeometryEffect(id: "crab", in: activityNamespace, isSource: showClosedActivity)
 
                     // Permission indicator only (amber) - waiting for input shows checkmark on right
                     if hasPendingPermission {
-                        PermissionIndicatorIcon(size: 14, color: Color(red: 0.85, green: 0.47, blue: 0.34))
+                        PermissionIndicatorIcon(size: iconSize, color: Color(red: 0.85, green: 0.47, blue: 0.34))
                             .matchedGeometryEffect(id: "status-indicator", in: activityNamespace, isSource: showClosedActivity)
                     }
                 }
@@ -268,14 +293,16 @@ struct NotchView: View {
                 openedHeaderContent
             } else if !showClosedActivity {
                 // Closed without activity: empty space
+                let inset: CGFloat = isPillMode ? 10 : 20
                 Rectangle()
                     .fill(.clear)
-                    .frame(width: closedNotchSize.width - 20)
+                    .frame(width: closedNotchSize.width - inset)
             } else {
                 // Closed with activity: black spacer (with optional bounce)
+                let inset: CGFloat = isPillMode ? pillCornerRadius.closed : cornerRadiusInsets.closed.top
                 Rectangle()
                     .fill(.black)
-                    .frame(width: closedNotchSize.width - cornerRadiusInsets.closed.top + (isBouncing ? 16 : 0))
+                    .frame(width: closedNotchSize.width - inset + (isBouncing ? 16 : 0))
             }
 
             // Right side - spinner when processing/pending, checkmark when waiting for input
@@ -405,8 +432,13 @@ struct NotchView: View {
                 waitingForInputTimestamps.removeAll()
             }
         case .closed:
-            // Don't hide on non-notched devices - users need a visible target
-            guard viewModel.hasPhysicalNotch else { return }
+            // Pill mode: hide if no sessions
+            if !viewModel.hasPhysicalNotch {
+                if sessionMonitor.instances.isEmpty {
+                    withAnimation(.easeInOut(duration: 0.2)) { isVisible = false }
+                }
+                return
+            }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
                 if viewModel.status == .closed && !isAnyProcessing && !hasPendingPermission && !hasWaitingForInput && !activityCoordinator.expandingActivity.show {
                     isVisible = false
