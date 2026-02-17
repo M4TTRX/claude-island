@@ -208,6 +208,7 @@ struct NotchView: View {
         .preferredColorScheme(.dark)
         .onAppear {
             sessionMonitor.startMonitoring()
+            viewModel.instanceCount = sessionMonitor.instances.count
             // Pill mode: only show when there are active sessions
             if !viewModel.hasPhysicalNotch {
                 isVisible = !sessionMonitor.instances.isEmpty
@@ -222,6 +223,7 @@ struct NotchView: View {
         .onChange(of: sessionMonitor.instances) { _, instances in
             handleProcessingChange()
             handleWaitingForInputChange(instances)
+            viewModel.instanceCount = instances.count
             // Pill mode: show/hide based on active sessions
             if !viewModel.hasPhysicalNotch && viewModel.status != .opened {
                 withAnimation(.easeInOut(duration: 0.2)) {

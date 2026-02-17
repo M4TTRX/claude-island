@@ -252,14 +252,9 @@ struct InstanceRow: View {
                 .transition(.opacity.combined(with: .scale(scale: 0.9)))
             } else {
                 HStack(spacing: 8) {
-                    // Chat icon - always show
-                    IconButton(icon: "bubble.left") {
-                        onChat()
-                    }
-
-                    // Focus icon (only for tmux instances with yabai)
+                    // Terminal icon (only for tmux instances with yabai)
                     if session.isInTmux && isYabaiAvailable {
-                        IconButton(icon: "eye") {
+                        IconButton(icon: "terminal") {
                             onFocus()
                         }
                     }
@@ -278,7 +273,7 @@ struct InstanceRow: View {
         .padding(.trailing, 14)
         .padding(.vertical, 10)
         .contentShape(Rectangle())
-        .onTapGesture(count: 2) {
+        .onTapGesture {
             onChat()
         }
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isWaitingForApproval)
