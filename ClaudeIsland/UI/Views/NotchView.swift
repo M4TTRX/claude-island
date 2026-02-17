@@ -115,6 +115,7 @@ struct NotchView: View {
         .preferredColorScheme(.dark)
         .onAppear {
             self.sessionMonitor.startMonitoring()
+            self.viewModel.instanceCount = self.sessionMonitor.instances.count
             // On non-notched devices (pill mode), show when there are active sessions
             // Also keep visible if accessibility permission is missing (show warning)
             // Also keep visible if Clawd always visible is enabled
@@ -131,6 +132,7 @@ struct NotchView: View {
         .onChange(of: self.sessionMonitor.instances) { _, instances in
             self.handleProcessingChange()
             self.handleWaitingForInputChange(instances)
+            self.viewModel.instanceCount = instances.count
             // Pill mode: show/hide based on active sessions
             if !self.viewModel.hasPhysicalNotch && self.viewModel.status != .opened {
                 withAnimation(.easeInOut(duration: 0.2)) {

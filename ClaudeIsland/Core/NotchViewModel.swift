@@ -72,6 +72,7 @@ final class NotchViewModel {
     var openReason: NotchOpenReason = .unknown
     var contentType: NotchContentType = .instances
     var isHovering = false
+    var instanceCount: Int = 0
 
     // MARK: - Geometry
 
@@ -124,9 +125,16 @@ final class NotchViewModel {
                     .expandedPickerHeight + self.clawdSelector.expandedPickerHeight,
             )
         case .instances:
+            let rowHeight: CGFloat = 54
+            let scrollPadding: CGFloat = 8
+            let headerAndBottom: CGFloat = 36
+            let minHeight: CGFloat = 80
+            let maxHeight: CGFloat = 320
+            let contentHeight = CGFloat(instanceCount) * rowHeight + scrollPadding
+            let totalHeight = min(maxHeight, max(minHeight, headerAndBottom + contentHeight))
             return CGSize(
                 width: min(self.screenRect.width * 0.4, 480),
-                height: 320,
+                height: totalHeight,
             )
         }
     }

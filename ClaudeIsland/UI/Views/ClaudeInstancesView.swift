@@ -349,6 +349,11 @@ struct InstanceRow: View {
         .onTapGesture {
             if !self.isEditing { self.onChat() }
         }
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(self.isHovered ? Color.white.opacity(0.06) : Color.clear),
+        )
+        .onHover { self.isHovered = $0 }
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: self.isWaitingForApproval)
     }
 
