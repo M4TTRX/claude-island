@@ -9,10 +9,16 @@ import AppKit
 import CoreGraphics
 import SwiftUI
 
-/// Corner radius constants
+// Corner radius constants for notch mode
 private let cornerRadiusInsets = (
     opened: (top: CGFloat(19), bottom: CGFloat(24)),
     closed: (top: CGFloat(6), bottom: CGFloat(14)),
+)
+
+// Corner radius constants for pill mode (external displays without notch)
+private let pillCornerRadius = (
+    opened: CGFloat(20),
+    closed: CGFloat(12),
 )
 
 // MARK: - NotchView
@@ -30,12 +36,20 @@ struct NotchView: View {
     /// View model is @Observable, so SwiftUI automatically tracks property access
     var viewModel: NotchViewModel
 
+    /// Whether we're in pill mode (external display without physical notch)
+    private var isPillMode: Bool { !self.viewModel.hasPhysicalNotch }
+
     // MARK: - Body
 
     var body: some View {
         ZStack(alignment: .top) {
             // Outer container does NOT receive hits - only the notch content does
             VStack(spacing: 0) {
+                // In pill mode, add a top gap so the pill sits within the menu bar
+                if self.isPillMode {
+                    Spacer().frame(height: 5)
+                }
+
                 self.notchLayout
                     .frame(
                         maxWidth: self.viewModel.status == .opened
@@ -46,21 +60,27 @@ struct NotchView: View {
                     .padding(
                         .horizontal,
                         self.viewModel.status == .opened
-                            ? cornerRadiusInsets.opened.top
-                            : cornerRadiusInsets.closed.bottom,
+                            ? (self.isPillMode ? pillCornerRadius.opened : cornerRadiusInsets.opened.top)
+                            : (self.isPillMode ? pillCornerRadius.closed : cornerRadiusInsets.closed.bottom),
                     )
                     .padding([.horizontal, .bottom], self.viewModel.status == .opened ? 12 : 0)
                     .background(.black)
-                    .clipShape(self.currentNotchShape)
+                    .clipShape(self.isPillMode
+                        ? AnyShape(PillShape(cornerRadius: self.viewModel.status == .opened ? pillCornerRadius.opened : pillCornerRadius.closed))
+                        : AnyShape(NotchShape(topCornerRadius: self.topCornerRadius, bottomCornerRadius: self.bottomCornerRadius)),
+                    )
                     .overlay(alignment: .top) {
-                        Rectangle()
-                            .fill(.black)
-                            .frame(height: 1)
-                            .padding(.horizontal, self.topCornerRadius)
+                        // Top-edge line only needed in notch mode to blend with the physical notch
+                        if !self.isPillMode {
+                            Rectangle()
+                                .fill(.black)
+                                .frame(height: 1)
+                                .padding(.horizontal, self.topCornerRadius)
+                        }
                     }
                     .shadow(
-                        color: (self.viewModel.status == .opened || self.isHovering) ? .black.opacity(0.7) : .clear,
-                        radius: 6,
+                        color: (self.viewModel.status == .opened || self.isHovering || self.isPillMode) ? .black.opacity(0.7) : .clear,
+                        radius: self.isPillMode && self.viewModel.status != .opened ? 4 : 6,
                     )
                     .frame(
                         maxWidth: self.viewModel.status == .opened
@@ -95,11 +115,11 @@ struct NotchView: View {
         .preferredColorScheme(.dark)
         .onAppear {
             self.sessionMonitor.startMonitoring()
-            // On non-notched devices, keep visible so users have a target to interact with
+            // On non-notched devices (pill mode), show when there are active sessions
             // Also keep visible if accessibility permission is missing (show warning)
             // Also keep visible if Clawd always visible is enabled
-            if !self.viewModel.hasPhysicalNotch || self.needsAccessibilityWarning || self.clawdAlwaysVisible {
-                self.isVisible = true
+            if !self.viewModel.hasPhysicalNotch {
+                self.isVisible = !self.sessionMonitor.instances.isEmpty || self.needsAccessibilityWarning || self.clawdAlwaysVisible
             }
         }
         .onChange(of: self.viewModel.status) { oldStatus, newStatus in
@@ -111,6 +131,12 @@ struct NotchView: View {
         .onChange(of: self.sessionMonitor.instances) { _, instances in
             self.handleProcessingChange()
             self.handleWaitingForInputChange(instances)
+            // Pill mode: show/hide based on active sessions
+            if !self.viewModel.hasPhysicalNotch && self.viewModel.status != .opened {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    self.isVisible = !instances.isEmpty
+                }
+            }
         }
         .onChange(of: self.accessibilityManager.shouldShowPermissionWarning) { _, shouldShow in
             // Keep notch visible while accessibility warning is shown
@@ -315,13 +341,19 @@ struct NotchView: View {
     // MARK: - Corner Radii
 
     private var topCornerRadius: CGFloat {
-        self.viewModel.status == .opened
+        if self.isPillMode {
+            return self.viewModel.status == .opened ? pillCornerRadius.opened : pillCornerRadius.closed
+        }
+        return self.viewModel.status == .opened
             ? cornerRadiusInsets.opened.top
             : cornerRadiusInsets.closed.top
     }
 
     private var bottomCornerRadius: CGFloat {
-        self.viewModel.status == .opened
+        if self.isPillMode {
+            return self.viewModel.status == .opened ? pillCornerRadius.opened : pillCornerRadius.closed
+        }
+        return self.viewModel.status == .opened
             ? cornerRadiusInsets.opened.bottom
             : cornerRadiusInsets.closed.bottom
     }
@@ -418,13 +450,14 @@ struct NotchView: View {
         HStack(spacing: 0) {
             // Left side - crab + optional indicators (only when minimized - when opened, crab moves to openedHeaderContent)
             if self.showClosedActivity && self.viewModel.status != .opened {
+                let iconSize: CGFloat = self.isPillMode ? 11 : 14
                 HStack(spacing: 4) {
-                    ClaudeCrabIcon(size: 14, color: self.clawdColor, animateLegs: self.isProcessing)
+                    ClaudeCrabIcon(size: iconSize, color: self.clawdColor, animateLegs: self.isProcessing)
                         .matchedGeometryEffect(id: "crab", in: self.activityNamespace, isSource: self.viewModel.status != .opened)
 
                     // Permission indicator (prompt) - waiting for input shows checkmark on right
                     if self.hasPendingPermission {
-                        PermissionIndicatorIcon(size: 14, color: self.clawdColor)
+                        PermissionIndicatorIcon(size: iconSize, color: self.clawdColor)
                             .matchedGeometryEffect(id: "status-indicator", in: self.activityNamespace, isSource: true)
                     }
 
@@ -433,7 +466,7 @@ struct NotchView: View {
                         Button {
                             self.accessibilityManager.handleAppActivation()
                         } label: {
-                            AccessibilityWarningIcon(size: 14, color: TerminalColors.amber)
+                            AccessibilityWarningIcon(size: iconSize, color: TerminalColors.amber)
                         }
                         .buttonStyle(.plain)
                     }
@@ -447,13 +480,15 @@ struct NotchView: View {
                 self.openedHeaderContent
             } else if !self.showClosedActivity {
                 // Closed without activity: empty space
+                let inset: CGFloat = self.isPillMode ? 10 : 20
                 Rectangle()
                     .fill(.clear)
-                    .frame(width: self.closedNotchSize.width - 20)
+                    .frame(width: self.closedNotchSize.width - inset)
             } else {
                 // Closed with activity: flexible spacer with session dots (with optional bounce)
+                let inset: CGFloat = self.isPillMode ? pillCornerRadius.closed : cornerRadiusInsets.closed.top
                 HStack(spacing: 0) {
-                    Spacer(minLength: 20)
+                    Spacer(minLength: inset)
                         .frame(maxWidth: .infinity)
                         .padding(.trailing, self.isBouncing ? 16 : 0)
                     // Session state dots (only when closed with multiple active sessions)
@@ -631,8 +666,13 @@ struct NotchView: View {
                 self.waitingForInputTimestamps.removeAll()
             }
         case .closed:
-            // Don't hide on non-notched devices - users need a visible target
-            guard self.viewModel.hasPhysicalNotch else { return }
+            // Pill mode: hide if no sessions
+            if !self.viewModel.hasPhysicalNotch {
+                if self.sessionMonitor.instances.isEmpty {
+                    withAnimation(.easeInOut(duration: 0.2)) { self.isVisible = false }
+                }
+                return
+            }
             // Don't hide when always-visible is enabled
             guard !self.clawdAlwaysVisible else { return }
             self.hideVisibilityTask?.cancel()

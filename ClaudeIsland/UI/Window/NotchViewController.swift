@@ -69,18 +69,19 @@ class NotchViewController: NSViewController {
                 )
             case .closed,
                  .popping:
+                // When closed, use the notch rect (or pill rect on non-notch displays)
                 let notchRect = geometry.deviceNotchRect
                 let screenWidth = geometry.screenRect.width
                 // Calculate expansion padding to account for session dots and activity indicators
-                // Max expansion: 2 * (notchHeight - 12) + 20 + 18 (permission indicator)
-                // Matches NotchView.expansionWidth logic: base 20 + optional 18 for permission indicator
                 let expansionPadding = 2 * max(0, notchRect.height - 12) + 38
                 let totalWidth = notchRect.width + expansionPadding
+                // Pill mode needs larger padding since the pill is smaller
+                let padY: CGFloat = geometry.isPillMode ? 8 : 5
                 return CGRect(
                     x: (screenWidth - totalWidth) / 2,
-                    y: windowHeight - notchRect.height - 5,
+                    y: windowHeight - notchRect.height - padY,
                     width: totalWidth,
-                    height: notchRect.height + 10,
+                    height: notchRect.height + padY * 2,
                 )
             }
         }

@@ -60,6 +60,7 @@ final class NotchViewModel {
             deviceNotchRect: deviceNotchRect,
             screenRect: screenRect,
             windowHeight: windowHeight,
+            isPillMode: !hasPhysicalNotch,
         )
         self.hasPhysicalNotch = hasPhysicalNotch
         self.setupEventHandlers()
