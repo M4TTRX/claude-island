@@ -69,13 +69,22 @@ struct ChatView: View {
 
                 // Approval bar, interactive prompt, or Input bar
                 if let tool = approvalTool {
-                    if tool == "AskUserQuestion" {
-                        // Interactive tools - show prompt to answer in terminal
-                        interactivePromptBar
-                            .transition(.asymmetric(
-                                insertion: .opacity.combined(with: .move(edge: .bottom)),
-                                removal: .opacity
-                            ))
+                    if tool == "AskUserQuestion" || tool.contains("AskUserQuestion") {
+                        if let questions = session.pendingQuestions, !questions.isEmpty, session.isInTmux {
+                            // Interactive answering with parsed question data
+                            questionBar(questions: questions)
+                                .transition(.asymmetric(
+                                    insertion: .opacity.combined(with: .move(edge: .bottom)),
+                                    removal: .opacity
+                                ))
+                        } else {
+                            // Fallback - go to terminal
+                            interactivePromptBar
+                                .transition(.asymmetric(
+                                    insertion: .opacity.combined(with: .move(edge: .bottom)),
+                                    removal: .opacity
+                                ))
+                        }
                     } else {
                         approvalBar(tool: tool)
                             .transition(.asymmetric(
@@ -429,6 +438,22 @@ struct ChatView: View {
         )
     }
 
+    // MARK: - Question Bar
+
+    private func questionBar(questions: [QuestionItem]) -> some View {
+        ChatQuestionBar(
+            questions: questions,
+            isInTmux: session.isInTmux,
+            onSelectOption: { _, optionIndex in
+                answerQuestion(optionIndex: optionIndex)
+            },
+            onSubmitText: { _, text in
+                answerQuestionWithText(text, questions: questions)
+            },
+            onGoToTerminal: { focusTerminal() }
+        )
+    }
+
     // MARK: - Autoscroll Management
 
     /// Pause autoscroll (user scrolled away from bottom)
@@ -462,6 +487,50 @@ struct ChatView: View {
 
     private func denyPermission() {
         sessionMonitor.denyPermission(sessionId: sessionId, reason: nil)
+    }
+
+    /// Answer a question by selecting an option via arrow key navigation.
+    /// First sends "allow" through the hook socket, then after a delay sends tmux keystrokes.
+    private func answerQuestion(optionIndex: Int) {
+        guard session.isInTmux, let tty = session.tty else { return }
+
+        resumeAutoscroll()
+        shouldScrollToBottom = true
+
+        // Allow the tool through the hook (unblocks the permission request)
+        sessionMonitor.approvePermission(sessionId: sessionId)
+
+        // After a delay, send arrow key navigation to select the option in the CLI
+        Task {
+            try? await Task.sleep(for: .milliseconds(500))
+            if let target = await findTmuxTarget(tty: tty) {
+                _ = await ToolApprovalHandler.shared.selectOption(at: optionIndex, to: target)
+            }
+        }
+    }
+
+    /// Answer a question with free text.
+    /// "Type something" is listed after the real options in the CLI selector.
+    private func answerQuestionWithText(_ text: String, questions: [QuestionItem]) {
+        guard session.isInTmux, let tty = session.tty else { return }
+
+        let typeOptionIndex = questions.first?.options.count ?? 0
+
+        resumeAutoscroll()
+        shouldScrollToBottom = true
+
+        sessionMonitor.approvePermission(sessionId: sessionId)
+
+        Task {
+            try? await Task.sleep(for: .milliseconds(500))
+            if let target = await findTmuxTarget(tty: tty) {
+                _ = await ToolApprovalHandler.shared.sendFreeTextAnswer(
+                    text,
+                    typeOptionIndex: typeOptionIndex,
+                    to: target
+                )
+            }
+        }
     }
 
     private func sendMessage() {

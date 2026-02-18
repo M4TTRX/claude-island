@@ -162,7 +162,7 @@ struct InstanceRow: View {
                 if isWaitingForApproval, let toolName = session.pendingToolName {
                     ToolApprovalInfo(
                         toolName: toolName,
-                        description: isInteractiveTool ? "Needs your input" : session.pendingToolInput,
+                        description: isInteractiveTool ? (session.pendingQuestions?.first?.question ?? "Needs your input") : session.pendingToolInput,
                         fullCommand: isInteractiveTool ? nil : session.pendingFullCommand,
                         compact: true
                     )
