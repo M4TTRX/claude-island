@@ -114,6 +114,7 @@ struct ChatHistoryItem: Identifiable, Equatable, Sendable {
 
 enum ChatHistoryItemType: Equatable, Sendable {
     case user(String)
+    case queuedUser(String)
     case assistant(String)
     case toolCall(ToolCallItem)
     case thinking(String)

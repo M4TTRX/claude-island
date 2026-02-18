@@ -99,6 +99,10 @@ def main():
     if event == "UserPromptSubmit":
         # User just sent a message - Claude is now processing
         state["status"] = "processing"
+        # Forward prompt text so the app can show queued prompts immediately
+        prompt_text = data.get("prompt", "")
+        if prompt_text:
+            state["message"] = prompt_text
 
     elif event == "PreToolUse":
         state["status"] = "running_tool"

@@ -474,7 +474,15 @@ struct ChatView: View {
         resumeAutoscroll()
         shouldScrollToBottom = true
 
-        // Don't add to history here - it will be synced from JSONL when UserPromptSubmit event fires
+        // If Claude is busy, show queued prompt immediately for instant feedback
+        if isProcessing {
+            Task {
+                await SessionStore.shared.process(
+                    .promptQueued(sessionId: sessionId, text: text)
+                )
+            }
+        }
+
         Task {
             await sendToSession(text)
         }
@@ -530,6 +538,8 @@ struct MessageItemView: View {
         switch item.type {
         case .user(let text):
             UserMessageView(text: text)
+        case .queuedUser(let text):
+            QueuedUserMessageView(text: text)
         case .assistant(let text):
             AssistantMessageView(text: text)
         case .toolCall(let tool):
@@ -558,6 +568,50 @@ struct UserMessageView: View {
                     RoundedRectangle(cornerRadius: 18)
                         .fill(Color.white.opacity(0.15))
                 )
+        }
+    }
+}
+
+// MARK: - Queued User Message
+
+struct QueuedUserMessageView: View {
+    let text: String
+
+    @State private var pulseOpacity: Double = 0.7
+
+    var body: some View {
+        HStack {
+            Spacer(minLength: 60)
+
+            VStack(alignment: .trailing, spacing: 4) {
+                MarkdownText(text, color: .white.opacity(0.5), fontSize: 13)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 18)
+                            .fill(Color.white.opacity(0.05))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 18)
+                                    .strokeBorder(
+                                        Color.white.opacity(0.15),
+                                        style: StrokeStyle(lineWidth: 1, dash: [4, 3])
+                                    )
+                            )
+                    )
+
+                HStack(spacing: 4) {
+                    Image(systemName: "clock")
+                        .font(.system(size: 9))
+                    Text("Queued")
+                        .font(.system(size: 10, weight: .medium))
+                }
+                .foregroundColor(.white.opacity(pulseOpacity * 0.5))
+                .onAppear {
+                    withAnimation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true)) {
+                        pulseOpacity = 0.4
+                    }
+                }
+            }
         }
     }
 }

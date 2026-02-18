@@ -43,6 +43,11 @@ struct SessionState: Equatable, Identifiable, Sendable {
     /// State for Task tools and their nested subagent tools
     var subagentState: SubagentState
 
+    // MARK: - Queued Prompts
+
+    /// Prompts submitted while Claude is processing, not yet visible in JSONL
+    var queuedPrompts: [QueuedPrompt]
+
     // MARK: - Conversation Info (from JSONL parsing)
 
     var conversationInfo: ConversationInfo
@@ -75,6 +80,7 @@ struct SessionState: Equatable, Identifiable, Sendable {
         chatItems: [ChatHistoryItem] = [],
         toolTracker: ToolTracker = ToolTracker(),
         subagentState: SubagentState = SubagentState(),
+        queuedPrompts: [QueuedPrompt] = [],
         conversationInfo: ConversationInfo = ConversationInfo(
             summary: nil, lastMessage: nil, lastMessageRole: nil,
             lastToolName: nil, firstUserMessage: nil, lastUserMessageDate: nil
@@ -93,6 +99,7 @@ struct SessionState: Equatable, Identifiable, Sendable {
         self.chatItems = chatItems
         self.toolTracker = toolTracker
         self.subagentState = subagentState
+        self.queuedPrompts = queuedPrompts
         self.conversationInfo = conversationInfo
         self.needsClearReconciliation = needsClearReconciliation
         self.lastActivity = lastActivity
@@ -258,6 +265,15 @@ enum ToolInProgressPhase: Equatable, Sendable {
     case starting
     case running
     case pendingApproval
+}
+
+// MARK: - Queued Prompt
+
+/// A prompt submitted while Claude is processing, not yet visible in JSONL
+struct QueuedPrompt: Equatable, Sendable, Identifiable {
+    let id: String
+    let text: String
+    let timestamp: Date
 }
 
 // MARK: - Subagent State
