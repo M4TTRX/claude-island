@@ -325,7 +325,6 @@ struct InstanceRow: View {
                     .transition(.opacity.combined(with: .scale(scale: 0.9)))
                 } else if self.isWaitingForApproval {
                     InlineApprovalButtons(
-                        onChat: self.onChat,
                         onApprove: self.onApprove,
                         onReject: self.onReject,
                     )
@@ -402,21 +401,14 @@ struct InstanceRow: View {
 
 /// Compact inline approval buttons with staggered animation
 struct InlineApprovalButtons: View {
-    // MARK: Internal
-
-    let onChat: () -> Void
     let onApprove: () -> Void
     let onReject: () -> Void
 
+    @State private var showDenyButton = false
+    @State private var showAllowButton = false
+
     var body: some View {
         HStack(spacing: 6) {
-            // Chat button
-            IconButton(icon: "bubble.left") {
-                self.onChat()
-            }
-            .opacity(self.showChatButton ? 1 : 0)
-            .scaleEffect(self.showChatButton ? 1 : 0.8)
-
             Button {
                 self.onReject()
             } label: {
@@ -449,12 +441,9 @@ struct InlineApprovalButtons: View {
         }
         .onAppear {
             withAnimation(.spring(response: 0.3, dampingFraction: 0.7).delay(0.0)) {
-                self.showChatButton = true
-            }
-            withAnimation(.spring(response: 0.3, dampingFraction: 0.7).delay(0.05)) {
                 self.showDenyButton = true
             }
-            withAnimation(.spring(response: 0.3, dampingFraction: 0.7).delay(0.1)) {
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.7).delay(0.05)) {
                 self.showAllowButton = true
             }
         }
@@ -462,7 +451,7 @@ struct InlineApprovalButtons: View {
 
     // MARK: Private
 
-    @State private var showChatButton = false
+
     @State private var showDenyButton = false
     @State private var showAllowButton = false
 }
