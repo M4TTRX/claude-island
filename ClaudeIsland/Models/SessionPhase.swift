@@ -18,6 +18,14 @@ struct PermissionContext: Sendable {
     /// Format tool input for display
     var formattedInput: String? {
         guard let input = toolInput else { return nil }
+
+        // For Bash, prefer the description field as the summary line
+        if toolName == "Bash" || toolName == "BashOutput" {
+            if let desc = input["description"]?.value as? String {
+                return desc
+            }
+        }
+
         var parts: [String] = []
         for (key, value) in input {
             let valueStr: String
@@ -36,6 +44,35 @@ struct PermissionContext: Sendable {
             parts.append("\(key): \(valueStr)")
         }
         return parts.joined(separator: "\n")
+    }
+
+    /// Full command text for expanded display (no truncation)
+    var fullCommandText: String? {
+        guard let input = toolInput else { return nil }
+
+        // For Bash, extract the command
+        if toolName == "Bash" || toolName == "BashOutput" {
+            if let cmd = input["command"]?.value as? String {
+                return cmd
+            }
+        }
+
+        // For file tools, show the path or pattern
+        if let path = input["file_path"]?.value as? String {
+            return path
+        }
+        if let pattern = input["pattern"]?.value as? String {
+            return pattern
+        }
+
+        // For other tools, show full input without truncation
+        var parts: [String] = []
+        for (key, value) in input {
+            if let str = value.value as? String {
+                parts.append("\(key): \(str)")
+            }
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: "\n")
     }
 }
 

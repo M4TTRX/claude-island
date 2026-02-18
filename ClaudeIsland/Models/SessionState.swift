@@ -149,6 +149,11 @@ struct SessionState: Equatable, Identifiable, Sendable {
         activePermission?.formattedInput
     }
 
+    /// Full command text for expanded display
+    var pendingFullCommand: String? {
+        activePermission?.fullCommandText
+    }
+
     /// Last message content
     var lastMessage: String? {
         conversationInfo.lastMessage

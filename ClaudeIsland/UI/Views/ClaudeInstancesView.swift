@@ -146,7 +146,7 @@ struct InstanceRow: View {
     }
 
     var body: some View {
-        HStack(alignment: .center, spacing: 10) {
+        HStack(alignment: .top, spacing: 10) {
             // State indicator on left
             stateIndicator
                 .frame(width: 14)
@@ -160,7 +160,7 @@ struct InstanceRow: View {
 
                 // Show tool call when waiting for approval, otherwise last activity
                 if isWaitingForApproval, let toolName = session.pendingToolName {
-                    // Show tool name in amber + input on same line
+                    // Show tool name in amber + description on same line
                     HStack(spacing: 4) {
                         Text(MCPToolFormatter.formatToolName(toolName))
                             .font(.system(size: 11, weight: .medium, design: .monospaced))
@@ -176,6 +176,14 @@ struct InstanceRow: View {
                                 .foregroundColor(.white.opacity(0.5))
                                 .lineLimit(1)
                         }
+                    }
+                    // Full command below in monospace
+                    if !isInteractiveTool, let command = session.pendingFullCommand {
+                        Text(command)
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundColor(.white.opacity(0.3))
+                            .lineLimit(4)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 } else if let role = session.lastMessageRole {
                     switch role {
