@@ -26,7 +26,7 @@ struct ClaudeInstancesView: View {
         VStack(spacing: 8) {
             Text("No sessions")
                 .font(.system(size: 13, weight: .medium))
-                .foregroundColor(.white.opacity(0.4))
+                .foregroundColor(TerminalColors.dim)
 
             Text("Run claude in terminal")
                 .font(.system(size: 11))
@@ -160,31 +160,12 @@ struct InstanceRow: View {
 
                 // Show tool call when waiting for approval, otherwise last activity
                 if isWaitingForApproval, let toolName = session.pendingToolName {
-                    // Show tool name in amber + description on same line
-                    HStack(spacing: 4) {
-                        Text(MCPToolFormatter.formatToolName(toolName))
-                            .font(.system(size: 11, weight: .medium, design: .monospaced))
-                            .foregroundColor(TerminalColors.amber.opacity(0.9))
-                        if isInteractiveTool {
-                            Text("Needs your input")
-                                .font(.system(size: 11))
-                                .foregroundColor(.white.opacity(0.5))
-                                .lineLimit(1)
-                        } else if let input = session.pendingToolInput {
-                            Text(input)
-                                .font(.system(size: 11))
-                                .foregroundColor(.white.opacity(0.5))
-                                .lineLimit(1)
-                        }
-                    }
-                    // Full command below in monospace
-                    if !isInteractiveTool, let command = session.pendingFullCommand {
-                        Text(command)
-                            .font(.system(size: 10, design: .monospaced))
-                            .foregroundColor(.white.opacity(0.3))
-                            .lineLimit(4)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+                    ToolApprovalInfo(
+                        toolName: toolName,
+                        description: isInteractiveTool ? "Needs your input" : session.pendingToolInput,
+                        fullCommand: isInteractiveTool ? nil : session.pendingFullCommand,
+                        compact: true
+                    )
                 } else if let role = session.lastMessageRole {
                     switch role {
                     case "tool":
@@ -193,12 +174,12 @@ struct InstanceRow: View {
                             if let toolName = session.lastToolName {
                                 Text(MCPToolFormatter.formatToolName(toolName))
                                     .font(.system(size: 11, weight: .medium, design: .monospaced))
-                                    .foregroundColor(.white.opacity(0.5))
+                                    .foregroundColor(TerminalColors.dim)
                             }
                             if let input = session.lastMessage {
                                 Text(input)
                                     .font(.system(size: 11))
-                                    .foregroundColor(.white.opacity(0.4))
+                                    .foregroundColor(TerminalColors.dim)
                                     .lineLimit(1)
                             }
                         }
@@ -207,11 +188,11 @@ struct InstanceRow: View {
                         HStack(spacing: 4) {
                             Text("You:")
                                 .font(.system(size: 11, weight: .medium))
-                                .foregroundColor(.white.opacity(0.5))
+                                .foregroundColor(TerminalColors.dim)
                             if let msg = session.lastMessage {
                                 Text(msg)
                                     .font(.system(size: 11))
-                                    .foregroundColor(.white.opacity(0.4))
+                                    .foregroundColor(TerminalColors.dim)
                                     .lineLimit(1)
                             }
                         }
@@ -220,14 +201,14 @@ struct InstanceRow: View {
                         if let msg = session.lastMessage {
                             Text(msg)
                                 .font(.system(size: 11))
-                                .foregroundColor(.white.opacity(0.4))
+                                .foregroundColor(TerminalColors.dim)
                                 .lineLimit(1)
                         }
                     }
                 } else if let lastMsg = session.lastMessage {
                     Text(lastMsg)
                         .font(.system(size: 11))
-                        .foregroundColor(.white.opacity(0.4))
+                        .foregroundColor(TerminalColors.dim)
                         .lineLimit(1)
                 }
             }
@@ -404,7 +385,7 @@ struct IconButton: View {
         } label: {
             Image(systemName: icon)
                 .font(.system(size: 11, weight: .medium))
-                .foregroundColor(isHovered ? .white.opacity(0.8) : .white.opacity(0.4))
+                .foregroundColor(isHovered ? .white.opacity(0.8) : TerminalColors.dim)
                 .frame(width: 24, height: 24)
                 .background(
                     RoundedRectangle(cornerRadius: 6)
@@ -462,12 +443,45 @@ struct TerminalButton: View {
                 Text("Terminal")
                     .font(.system(size: 11, weight: .medium))
             }
-            .foregroundColor(isEnabled ? .black : .white.opacity(0.4))
+            .foregroundColor(isEnabled ? .black : TerminalColors.dim)
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
             .background(isEnabled ? Color.white.opacity(0.95) : Color.white.opacity(0.1))
             .clipShape(Capsule())
         }
         .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Shared Tool Approval Info
+
+/// Shared component for displaying tool approval info in both instance list and chat view
+struct ToolApprovalInfo: View {
+    let toolName: String
+    let description: String?
+    let fullCommand: String?
+    var compact: Bool = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 4) {
+                Text(MCPToolFormatter.formatToolName(toolName))
+                    .font(.system(size: compact ? 11 : 12, weight: .medium, design: .monospaced))
+                    .foregroundColor(TerminalColors.amber)
+                if let desc = description {
+                    Text(desc)
+                        .font(.system(size: 11))
+                        .foregroundColor(TerminalColors.dim)
+                        .lineLimit(1)
+                }
+            }
+            if let command = fullCommand {
+                Text(command)
+                    .font(.system(size: compact ? 10 : 11, design: .monospaced))
+                    .foregroundColor(TerminalColors.dim)
+                    .lineLimit(4)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
     }
 }

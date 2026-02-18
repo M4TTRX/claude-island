@@ -412,6 +412,7 @@ struct ChatView: View {
         ChatApprovalBar(
             tool: tool,
             toolInput: session.pendingToolInput,
+            fullCommand: session.pendingFullCommand,
             onApprove: { approvePermission() },
             onDeny: { denyPermission() }
         )
@@ -1049,6 +1050,7 @@ struct ChatInteractivePromptBar: View {
 struct ChatApprovalBar: View {
     let tool: String
     let toolInput: String?
+    var fullCommand: String? = nil
     let onApprove: () -> Void
     let onDeny: () -> Void
 
@@ -1058,18 +1060,13 @@ struct ChatApprovalBar: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            // Tool info
-            VStack(alignment: .leading, spacing: 2) {
-                Text(MCPToolFormatter.formatToolName(tool))
-                    .font(.system(size: 12, weight: .medium, design: .monospaced))
-                    .foregroundColor(TerminalColors.amber)
-                if let input = toolInput {
-                    Text(input)
-                        .font(.system(size: 11))
-                        .foregroundColor(.white.opacity(0.5))
-                        .lineLimit(1)
-                }
-            }
+            // Tool info - shared component
+            ToolApprovalInfo(
+                toolName: tool,
+                description: toolInput,
+                fullCommand: fullCommand,
+                compact: false
+            )
             .opacity(showContent ? 1 : 0)
             .offset(x: showContent ? 0 : -10)
 
