@@ -162,6 +162,11 @@ nonisolated struct SessionState: Equatable, Identifiable, Sendable {
         self.activePermission?.formattedInput
     }
 
+    /// Full command text for expanded display
+    var pendingFullCommand: String? {
+        activePermission?.fullCommandText
+    }
+
     /// Last message content
     var lastMessage: String? {
         self.conversationInfo.lastMessage

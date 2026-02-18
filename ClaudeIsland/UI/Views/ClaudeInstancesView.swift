@@ -245,6 +245,14 @@ struct InstanceRow: View {
                                 .clipShape(Capsule())
                         }
                     }
+                    // Full command below in monospace
+                    if !self.isInteractiveTool, let command = self.session.pendingFullCommand {
+                        Text(command)
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundColor(.white.opacity(0.3))
+                            .lineLimit(4)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
 
                     if self.isWaitingForApproval, let toolName = self.session.pendingToolName {
                         HStack(spacing: 4) {
