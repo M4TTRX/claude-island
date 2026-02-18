@@ -62,6 +62,11 @@ nonisolated enum SessionEvent: Sendable {
     /// Agent file was updated with new subagent tools (from AgentFileWatcher)
     case agentFileUpdated(sessionID: String, taskToolID: String, tools: [SubagentToolInfo])
 
+    // MARK: - Queued Prompt Events
+
+    /// User prompt was queued (Claude is busy processing)
+    case promptQueued(sessionID: String, text: String)
+
     // MARK: - Clear Events (from JSONL detection)
 
     /// User issued /clear command - reset UI state while keeping session alive
@@ -257,6 +262,8 @@ nonisolated extension SessionEvent: CustomStringConvertible {
             "fileUpdated(session: \(payload.sessionID.prefix(8)), messages: \(payload.messages.count))"
         case let .interruptDetected(sessionID):
             "interruptDetected(session: \(sessionID.prefix(8)))"
+        case let .promptQueued(sessionID, text):
+            "promptQueued(session: \(sessionID.prefix(8)), text: \(text.prefix(30)))"
         case let .clearDetected(sessionID):
             "clearDetected(session: \(sessionID.prefix(8)))"
         case let .sessionEnded(sessionID):

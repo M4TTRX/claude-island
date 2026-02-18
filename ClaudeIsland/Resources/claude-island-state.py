@@ -378,7 +378,12 @@ def determine_status(
     match event:
         case "UserPromptSubmit":
             # User just sent a message - Claude is now processing
-            return "processing", {}
+            # Forward prompt text so the app can show queued prompts immediately
+            extras: ToolExtras = {}
+            prompt_text = data.get("prompt", "")
+            if prompt_text:
+                extras["message"] = prompt_text
+            return "processing", extras
 
         case "PreToolUse":
             extras: ToolExtras = {}

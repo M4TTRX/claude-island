@@ -89,6 +89,9 @@ actor SessionStore {
         case let .interruptDetected(sessionID):
             await self.processInterrupt(sessionID: sessionID)
 
+        case let .promptQueued(sessionID, text):
+            self.processPromptQueued(sessionID: sessionID, text: text)
+
         case let .clearDetected(sessionID):
             await self.processClearDetected(sessionID: sessionID)
 
@@ -305,6 +308,25 @@ actor SessionStore {
 
         if event.event == "Stop" {
             session.subagentState = SubagentState()
+        }
+
+        // Detect queued prompts from UserPromptSubmit while processing
+        if event.event == "UserPromptSubmit",
+           let promptText = event.message, !promptText.isEmpty {
+            let isQueued = session.phase == .processing || session.phase == .compacting
+            let alreadyQueued = session.queuedPrompts.contains(where: {
+                $0.text.trimmingCharacters(in: .whitespacesAndNewlines) == promptText.trimmingCharacters(in: .whitespacesAndNewlines)
+            })
+            if isQueued && !alreadyQueued {
+                let queued = QueuedPrompt(id: UUID().uuidString, text: promptText, timestamp: Date())
+                session.queuedPrompts.append(queued)
+                session.chatItems.append(ChatHistoryItem(
+                    id: "queued-\(queued.id)",
+                    type: .queuedUser(promptText),
+                    timestamp: Date(),
+                ))
+                Self.logger.debug("Queued prompt for session \(sessionID.prefix(8), privacy: .public): \(promptText.prefix(30), privacy: .public)")
+            }
         }
 
         self.sessions[sessionID] = session
@@ -637,6 +659,32 @@ actor SessionStore {
 
         session.toolTracker.lastSyncTime = Date()
 
+        // Reconcile queued prompts with real JSONL messages
+        if !session.queuedPrompts.isEmpty {
+            for message in payload.messages where message.role == .user {
+                let userText = message.textContent.trimmingCharacters(in: .whitespacesAndNewlines)
+                if let idx = session.queuedPrompts.firstIndex(where: {
+                    $0.text.trimmingCharacters(in: .whitespacesAndNewlines) == userText
+                }) {
+                    let queuedId = "queued-\(session.queuedPrompts[idx].id)"
+                    session.chatItems.removeAll { $0.id == queuedId }
+                    session.queuedPrompts.remove(at: idx)
+                    Self.logger.debug("Reconciled queued prompt for session \(payload.sessionID.prefix(8), privacy: .public)")
+                }
+            }
+
+            // Expire stale queued prompts (safety net: 60s timeout)
+            let staleThreshold = Date().addingTimeInterval(-60)
+            let staleIds = session.queuedPrompts
+                .filter { $0.timestamp < staleThreshold }
+                .map { "queued-\($0.id)" }
+            if !staleIds.isEmpty {
+                session.queuedPrompts.removeAll { $0.timestamp < staleThreshold }
+                session.chatItems.removeAll { staleIds.contains($0.id) }
+                Self.logger.debug("Expired \(staleIds.count) stale queued prompts for session \(payload.sessionID.prefix(8), privacy: .public)")
+            }
+        }
+
         await self.populateSubagentToolsFromAgentFiles(
             session: &session,
             cwd: payload.cwd,
@@ -810,6 +858,11 @@ actor SessionStore {
         // Clear subagent state
         session.subagentState = SubagentState()
 
+        // Clear queued prompts
+        let queuedIds = session.queuedPrompts.map { "queued-\($0.id)" }
+        session.queuedPrompts.removeAll()
+        session.chatItems.removeAll { queuedIds.contains($0.id) }
+
         // Mark running tools as interrupted
         for i in 0 ..< session.chatItems.count {
             if case var .toolCall(tool) = session.chatItems[i].type,
@@ -831,12 +884,41 @@ actor SessionStore {
         self.sessions[sessionID] = session
     }
 
+    // MARK: - Queued Prompt Processing
+
+    /// Handle queued prompt from notch UI (optimistic add)
+    private func processPromptQueued(sessionID: String, text: String) {
+        guard var session = self.sessions[sessionID] else { return }
+
+        // Deduplicate: skip if already queued with same text
+        let normalizedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if session.queuedPrompts.contains(where: {
+            $0.text.trimmingCharacters(in: .whitespacesAndNewlines) == normalizedText
+        }) {
+            return
+        }
+
+        let queued = QueuedPrompt(id: UUID().uuidString, text: text, timestamp: Date())
+        session.queuedPrompts.append(queued)
+        session.chatItems.append(ChatHistoryItem(
+            id: "queued-\(queued.id)",
+            type: .queuedUser(text),
+            timestamp: Date(),
+        ))
+
+        self.sessions[sessionID] = session
+        Self.logger.debug("Queued prompt (notch UI) for session \(sessionID.prefix(8), privacy: .public): \(text.prefix(30), privacy: .public)")
+    }
+
     // MARK: - Clear Processing
 
     private func processClearDetected(sessionID: String) async {
         guard var session = sessions[sessionID] else { return }
 
         Self.logger.info("Processing /clear for session \(sessionID.prefix(8), privacy: .public)")
+
+        // Clear queued prompts
+        session.queuedPrompts.removeAll()
 
         // Mark that a clear happened - the next fileUpdated will reconcile
         // by removing items that no longer exist in the parser's state
