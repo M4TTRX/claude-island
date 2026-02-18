@@ -260,7 +260,7 @@ struct InstanceRow: View {
                                 .font(.system(size: 11, weight: .medium, design: .monospaced))
                                 .foregroundColor(TerminalColors.amber.opacity(0.9))
                             if self.isInteractiveTool {
-                                Text("Needs your input")
+                                Text(self.session.pendingQuestions?.first?.question ?? "Needs your input")
                                     .font(.system(size: 11))
                                     .foregroundColor(.white.opacity(0.5))
                                     .lineLimit(1)

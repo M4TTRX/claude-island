@@ -52,7 +52,42 @@ actor ToolApprovalHandler {
         await self.sendKeys(to: target, keys: message, pressEnter: true)
     }
 
-    // MARK: Private
+    /// Select an option from an interactive CLI selector by sending Down-arrow keys + Enter.
+    /// The selector starts with cursor on option 0. To select option N (0-indexed),
+    /// send N Down-arrow keys then Enter.
+    func selectOption(at index: Int, to target: TmuxTarget) async -> Bool {
+        guard let tmuxPath = await TmuxPathFinder.shared.getTmuxPath() else {
+            return false
+        }
+
+        let targetStr = target.targetString
+
+        do {
+            for _ in 0 ..< index {
+                let downArgs = ["send-keys", "-t", targetStr, "Down"]
+                _ = try await ProcessExecutor.shared.run(tmuxPath, arguments: downArgs)
+                try? await Task.sleep(for: .milliseconds(50))
+            }
+
+            let enterArgs = ["send-keys", "-t", targetStr, "Enter"]
+            _ = try await ProcessExecutor.shared.run(tmuxPath, arguments: enterArgs)
+
+            return true
+        } catch {
+            Self.logger.error("selectOption error: \(error.localizedDescription, privacy: .public)")
+            return false
+        }
+    }
+
+    /// Send a free-text answer by first selecting the "Type something" option,
+    /// then typing the text and pressing Enter.
+    func sendFreeTextAnswer(_ text: String, typeOptionIndex: Int, to target: TmuxTarget) async -> Bool {
+        guard await self.selectOption(at: typeOptionIndex, to: target) else {
+            return false
+        }
+        try? await Task.sleep(for: .milliseconds(200))
+        return await self.sendMessage(text, to: target)
+    }
 
     // MARK: - Private Methods
 

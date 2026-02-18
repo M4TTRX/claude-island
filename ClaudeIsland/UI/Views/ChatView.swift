@@ -58,13 +58,22 @@ struct ChatView: View {
 
                 // Approval bar, interactive prompt, or Input bar
                 if let tool = approvalTool {
-                    if tool == "AskUserQuestion" {
-                        // Interactive tools - show prompt to answer in terminal
-                        self.interactivePromptBar
-                            .transition(.asymmetric(
-                                insertion: .opacity.combined(with: .move(edge: .bottom)),
-                                removal: .opacity,
-                            ))
+                    if tool == "AskUserQuestion" || tool.contains("AskUserQuestion") {
+                        if let questions = self.session.pendingQuestions, !questions.isEmpty, self.session.isInTmux {
+                            // Interactive answering with parsed question data
+                            self.questionBar(questions: questions)
+                                .transition(.asymmetric(
+                                    insertion: .opacity.combined(with: .move(edge: .bottom)),
+                                    removal: .opacity,
+                                ))
+                        } else {
+                            // Fallback - go to terminal
+                            self.interactivePromptBar
+                                .transition(.asymmetric(
+                                    insertion: .opacity.combined(with: .move(edge: .bottom)),
+                                    removal: .opacity,
+                                ))
+                        }
                     } else {
                         self.approvalBar(tool: tool)
                             .transition(.asymmetric(
@@ -546,6 +555,22 @@ struct ChatView: View {
         )
     }
 
+    // MARK: - Question Bar
+
+    private func questionBar(questions: [QuestionItem]) -> some View {
+        ChatQuestionBar(
+            questions: questions,
+            isInTmux: self.session.isInTmux,
+            onSelectOption: { _, optionIndex in
+                self.answerQuestion(optionIndex: optionIndex)
+            },
+            onSubmitText: { _, text in
+                self.answerQuestionWithText(text, questions: questions)
+            },
+            onGoToTerminal: { self.focusTerminal() }
+        )
+    }
+
     // MARK: - Autoscroll Management
 
     /// Pause autoscroll (user scrolled away from bottom)
@@ -666,6 +691,50 @@ struct ChatView: View {
 
     private func denyPermission() {
         self.sessionMonitor.denyPermission(sessionID: self.sessionID, reason: nil)
+    }
+
+    /// Answer a question by selecting an option via arrow key navigation.
+    /// First sends "allow" through the hook socket, then after a delay sends tmux keystrokes.
+    private func answerQuestion(optionIndex: Int) {
+        guard self.session.isInTmux, let tty = self.session.tty else { return }
+
+        self.resumeAutoscroll()
+        self.shouldScrollToBottom = true
+
+        // Allow the tool through the hook (unblocks the permission request)
+        self.sessionMonitor.approvePermission(sessionID: self.sessionID)
+
+        // After a delay, send arrow key navigation to select the option in the CLI
+        Task {
+            try? await Task.sleep(for: .milliseconds(500))
+            if let target = await findTmuxTarget(tty: tty) {
+                _ = await ToolApprovalHandler.shared.selectOption(at: optionIndex, to: target)
+            }
+        }
+    }
+
+    /// Answer a question with free text.
+    /// "Type something" is listed after the real options in the CLI selector.
+    private func answerQuestionWithText(_ text: String, questions: [QuestionItem]) {
+        guard self.session.isInTmux, let tty = self.session.tty else { return }
+
+        let typeOptionIndex = questions.first?.options.count ?? 0
+
+        self.resumeAutoscroll()
+        self.shouldScrollToBottom = true
+
+        self.sessionMonitor.approvePermission(sessionID: self.sessionID)
+
+        Task {
+            try? await Task.sleep(for: .milliseconds(500))
+            if let target = await findTmuxTarget(tty: tty) {
+                _ = await ToolApprovalHandler.shared.sendFreeTextAnswer(
+                    text,
+                    typeOptionIndex: typeOptionIndex,
+                    to: target
+                )
+            }
+        }
     }
 
     private func sendMessage() {

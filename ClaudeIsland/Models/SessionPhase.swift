@@ -84,6 +84,41 @@ nonisolated struct PermissionContext: Sendable {
         }
         return parts.isEmpty ? nil : parts.joined(separator: "\n")
     }
+
+    /// Parse AskUserQuestion data from toolInput
+    var parsedQuestions: [QuestionItem]? {
+        guard toolName == "AskUserQuestion" || toolName.contains("AskUserQuestion"),
+              let input = toolInput,
+              let questionsValue = input["questions"],
+              let questionsArray = questionsValue.value as? [Any] else {
+            return nil
+        }
+
+        let items = questionsArray.compactMap { item -> QuestionItem? in
+            guard let dict = item as? [String: Any],
+                  let question = dict["question"] as? String else { return nil }
+
+            var options: [QuestionOption] = []
+            if let optionsArray = dict["options"] as? [[String: Any]] {
+                // Object format: [{label: "X", description: "Y"}, ...]
+                options = optionsArray.compactMap { opt -> QuestionOption? in
+                    guard let label = opt["label"] as? String else { return nil }
+                    return QuestionOption(label: label, description: opt["description"] as? String)
+                }
+            } else if let optionStrings = dict["options"] as? [String] {
+                // Simple string array: ["X", "Y", ...]
+                options = optionStrings.map { QuestionOption(label: $0, description: nil) }
+            }
+
+            return QuestionItem(
+                question: question,
+                header: dict["header"] as? String,
+                options: options
+            )
+        }
+
+        return items.isEmpty ? nil : items
+    }
 }
 
 // MARK: Equatable
