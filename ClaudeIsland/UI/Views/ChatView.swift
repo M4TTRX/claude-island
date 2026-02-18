@@ -478,6 +478,18 @@ struct ChatView: View {
         .zIndex(1) // Render above message list
     }
 
+    // MARK: - Approval Bar
+
+    private func approvalBar(tool: String) -> some View {
+        ChatApprovalBar(
+            tool: tool,
+            toolInput: self.session.pendingToolInput,
+            fullCommand: self.session.pendingFullCommand,
+            onApprove: { self.approvePermission() },
+            onDeny: { self.denyPermission() },
+        )
+    }
+
     // MARK: - Interactive Prompt Bar
 
     /// Bar for interactive tools like AskUserQuestion that need terminal input
@@ -1305,23 +1317,19 @@ struct ChatApprovalBar: View {
 
     let tool: String
     let toolInput: String?
+    var fullCommand: String? = nil
     let onApprove: () -> Void
     let onDeny: () -> Void
 
     var body: some View {
         HStack(spacing: 12) {
-            // Tool info
-            VStack(alignment: .leading, spacing: 2) {
-                Text(MCPToolFormatter.formatToolName(self.tool))
-                    .font(.system(size: 12, weight: .medium, design: .monospaced))
-                    .foregroundColor(TerminalColors.amber)
-                if let input = toolInput {
-                    Text(input)
-                        .font(.system(size: 11))
-                        .foregroundColor(.white.opacity(0.5))
-                        .lineLimit(1)
-                }
-            }
+            // Tool info - shared component
+            ToolApprovalInfo(
+                toolName: self.tool,
+                description: self.toolInput,
+                fullCommand: self.fullCommand,
+                compact: false,
+            )
             .opacity(self.showContent ? 1 : 0)
             .offset(x: self.showContent ? 0 : -10)
 

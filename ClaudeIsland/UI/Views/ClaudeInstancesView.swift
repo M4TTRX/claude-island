@@ -55,7 +55,7 @@ struct ClaudeInstancesView: View {
         VStack(spacing: 8) {
             Text("No sessions")
                 .font(.system(size: 13, weight: .medium))
-                .foregroundColor(.white.opacity(0.4))
+                .foregroundColor(TerminalColors.dim)
 
             Text("Run claude in terminal")
                 .font(.system(size: 11))
@@ -301,12 +301,6 @@ struct InstanceRow: View {
                             }
                         default:
                             if let msg = self.session.lastMessage {
-                                Text(msg)
-                                    .font(.system(size: 11))
-                                    .foregroundColor(.white.opacity(0.4))
-                                    .lineLimit(1)
-                            }
-                        }
                     } else if let lastMsg = self.session.lastMessage {
                         Text(lastMsg)
                             .font(.system(size: 11))
@@ -633,4 +627,37 @@ final class RightClickNSView: NSView {
     // MARK: Private
 
     private var monitor: Any?
+}
+
+// MARK: - Shared Tool Approval Info
+
+/// Shared component for displaying tool approval info in both instance list and chat view
+struct ToolApprovalInfo: View {
+    let toolName: String
+    let description: String?
+    let fullCommand: String?
+    var compact: Bool = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 4) {
+                Text(MCPToolFormatter.formatToolName(self.toolName))
+                    .font(.system(size: self.compact ? 11 : 12, weight: .medium, design: .monospaced))
+                    .foregroundColor(TerminalColors.amber)
+                if let desc = self.description {
+                    Text(desc)
+                        .font(.system(size: 11))
+                        .foregroundColor(.white.opacity(0.4))
+                        .lineLimit(1)
+                }
+            }
+            if let command = self.fullCommand {
+                Text(command)
+                    .font(.system(size: self.compact ? 10 : 11, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.3))
+                    .lineLimit(4)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
 }
