@@ -269,19 +269,26 @@ struct NotchView: View {
 
     // MARK: - Pill Status Text
 
-    /// Attributed status for pill mode with distinct colors for running vs idle
+    /// Attributed status for pill mode with distinct colors for running, pending, idle
     private var pillStatusText: Text {
+        let pending = sessionMonitor.instances.filter { $0.phase.isWaitingForApproval }.count
         let running = sessionMonitor.instances.filter { $0.phase.isActive }.count
-        let idle = sessionMonitor.instances.count - running
-        var result = Text("")
+        let idle = sessionMonitor.instances.count - running - pending
+        var parts: [Text] = []
         if running > 0 {
-            result = result + Text("\(running) running").foregroundColor(.white)
+            parts.append(Text("\(running) running").foregroundColor(.white))
         }
-        if running > 0 && idle > 0 {
-            result = result + Text("  ").foregroundColor(.clear)
+        if pending > 0 {
+            parts.append(Text("\(pending) pending").foregroundColor(TerminalColors.amber))
         }
         if idle > 0 {
-            result = result + Text("\(idle) idle").foregroundColor(.white.opacity(0.4))
+            parts.append(Text("\(idle) idle").foregroundColor(TerminalColors.dim))
+        }
+        let spacer = Text("  ").foregroundColor(.clear)
+        var result = Text("")
+        for (i, part) in parts.enumerated() {
+            if i > 0 { result = result + spacer }
+            result = result + part
         }
         return result
     }

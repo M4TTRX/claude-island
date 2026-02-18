@@ -147,9 +147,9 @@ struct InstanceRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
-            // State indicator on left
+            // State indicator on left, aligned with title baseline
             stateIndicator
-                .frame(width: 14)
+                .frame(width: 14, height: 16, alignment: .center)
 
             // Text content
             VStack(alignment: .leading, spacing: 2) {
