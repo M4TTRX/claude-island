@@ -418,7 +418,7 @@ struct ChatView: View {
                 self.imagePreview(image: image)
             }
 
-            HStack(spacing: 10) {
+            HStack(alignment: .bottom, spacing: 10) {
                 // Paste image button
                 Button {
                     self.pasteImageFromClipboard()
@@ -431,10 +431,11 @@ struct ChatView: View {
                 .disabled(!self.canSendMessages)
                 .help("Paste image from clipboard")
 
-                TextField(self.canSendMessages ? "Message Claude..." : "Open Claude Code in tmux to enable messaging", text: self.$inputText)
+                TextField(self.canSendMessages ? "Message Claude..." : "Open Claude Code in tmux to enable messaging", text: self.$inputText, axis: .vertical)
                     .textFieldStyle(.plain)
                     .font(.system(size: 13))
                     .foregroundColor(self.canSendMessages ? .white : .white.opacity(0.4))
+                    .lineLimit(1...6)
                     .focused(self.$isInputFocused)
                     .disabled(!self.canSendMessages)
                     .padding(.horizontal, 14)

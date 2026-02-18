@@ -55,7 +55,7 @@ final class NotchViewModel {
 
     // MARK: - Initialization
 
-    init(deviceNotchRect: CGRect, screenRect: CGRect, windowHeight: CGFloat, hasPhysicalNotch: Bool) {
+    init(deviceNotchRect: CGRect, screenRect: CGRect, windowHeight: CGFloat, hasPhysicalNotch: Bool, menuBarHeight: CGFloat = 24) {
         self.geometry = NotchGeometry(
             deviceNotchRect: deviceNotchRect,
             screenRect: screenRect,
@@ -63,6 +63,7 @@ final class NotchViewModel {
             isPillMode: !hasPhysicalNotch,
         )
         self.hasPhysicalNotch = hasPhysicalNotch
+        self.menuBarHeight = menuBarHeight
         self.setupEventHandlers()
         self.observeSelectors()
     }
@@ -79,6 +80,7 @@ final class NotchViewModel {
     let geometry: NotchGeometry
     let spacing: CGFloat = 12
     let hasPhysicalNotch: Bool
+    let menuBarHeight: CGFloat
 
     /// Tracks selector expansion state changes to trigger view updates
     /// (With @Observable, views reading openedSize will observe this and re-compute when selectors change)
