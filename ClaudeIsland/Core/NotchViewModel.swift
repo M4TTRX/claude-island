@@ -57,6 +57,7 @@ class NotchViewModel: ObservableObject {
     let geometry: NotchGeometry
     let spacing: CGFloat = 12
     let hasPhysicalNotch: Bool
+    let menuBarHeight: CGFloat
 
     var deviceNotchRect: CGRect { geometry.deviceNotchRect }
     var screenRect: CGRect { geometry.screenRect }
@@ -106,7 +107,7 @@ class NotchViewModel: ObservableObject {
 
     // MARK: - Initialization
 
-    init(deviceNotchRect: CGRect, screenRect: CGRect, windowHeight: CGFloat, hasPhysicalNotch: Bool) {
+    init(deviceNotchRect: CGRect, screenRect: CGRect, windowHeight: CGFloat, hasPhysicalNotch: Bool, menuBarHeight: CGFloat = 24) {
         self.geometry = NotchGeometry(
             deviceNotchRect: deviceNotchRect,
             screenRect: screenRect,
@@ -114,6 +115,7 @@ class NotchViewModel: ObservableObject {
             isPillMode: !hasPhysicalNotch
         )
         self.hasPhysicalNotch = hasPhysicalNotch
+        self.menuBarHeight = menuBarHeight
         setupEventHandlers()
         observeSelectors()
     }

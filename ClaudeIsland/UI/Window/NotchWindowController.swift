@@ -44,7 +44,8 @@ class NotchWindowController: NSWindowController {
             deviceNotchRect: deviceNotchRect,
             screenRect: screenFrame,
             windowHeight: windowHeight,
-            hasPhysicalNotch: hasNotch
+            hasPhysicalNotch: hasNotch,
+            menuBarHeight: screen.menuBarHeight
         )
 
         // Create the window

@@ -359,11 +359,12 @@ struct ChatView: View {
     }
 
     private var inputBar: some View {
-        HStack(spacing: 10) {
-            TextField(canSendMessages ? "Message Claude..." : "Open Claude Code in tmux to enable messaging", text: $inputText)
+        HStack(alignment: .bottom, spacing: 10) {
+            TextField(canSendMessages ? "Message Claude..." : "Open Claude Code in tmux to enable messaging", text: $inputText, axis: .vertical)
                 .textFieldStyle(.plain)
                 .font(.system(size: 13))
-                .foregroundColor(canSendMessages ? .white : .white.opacity(0.4))
+                .foregroundColor(canSendMessages ? .white : TerminalColors.dim)
+                .lineLimit(1...6)
                 .focused($isInputFocused)
                 .disabled(!canSendMessages)
                 .padding(.horizontal, 14)

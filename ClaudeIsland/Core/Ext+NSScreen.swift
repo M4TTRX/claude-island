@@ -17,8 +17,10 @@ extension NSScreen {
     /// On non-notch displays, returns a pill-sized rect matching the menu bar height.
     var notchSize: CGSize {
         guard hasPhysicalNotch else {
-            // Pill dimensions for non-notch displays — compact to fit in menu bar
-            return CGSize(width: 180, height: 22)
+            // Pill dimensions for non-notch displays — fit symmetrically in menu bar
+            let verticalPadding: CGFloat = 2
+            let pillHeight = max(16, menuBarHeight - 2 * verticalPadding)
+            return CGSize(width: 180, height: pillHeight)
         }
 
         let notchHeight = safeAreaInsets.top
