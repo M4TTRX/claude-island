@@ -161,6 +161,11 @@ struct SessionState: Equatable, Identifiable, Sendable {
         activePermission?.fullCommandText
     }
 
+    /// Parsed AskUserQuestion questions if applicable
+    var pendingQuestions: [QuestionItem]? {
+        activePermission?.parsedQuestions
+    }
+
     /// Last message content
     var lastMessage: String? {
         conversationInfo.lastMessage
