@@ -18,8 +18,8 @@ extension NSScreen {
     var notchSize: CGSize {
         guard hasPhysicalNotch else {
             // Pill dimensions for non-notch displays — fit symmetrically in menu bar
-            let verticalPadding: CGFloat = 2
-            let pillHeight = max(16, menuBarHeight - 2 * verticalPadding)
+            let verticalPadding: CGFloat = 5
+            let pillHeight = max(14, menuBarHeight - 2 * verticalPadding)
             return CGSize(width: 180, height: pillHeight)
         }
 
