@@ -146,6 +146,13 @@ class NotchViewModel: ObservableObject {
                 self?.handleMouseDown()
             }
             .store(in: &cancellables)
+
+        events.keyDown
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] event in
+                self?.handleKeyDown(event)
+            }
+            .store(in: &cancellables)
     }
 
     /// Whether we're in chat mode (sticky behavior)
@@ -181,6 +188,11 @@ class NotchViewModel: ObservableObject {
             hoverTimer = workItem
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: workItem)
         }
+    }
+
+    private func handleKeyDown(_ event: NSEvent) {
+        guard status == .opened, event.keyCode == 53 else { return }
+        notchClose()
     }
 
     private func handleMouseDown() {
