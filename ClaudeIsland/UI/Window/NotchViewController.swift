@@ -66,7 +66,7 @@ class NotchViewController: NSViewController {
                 let notchRect = geometry.deviceNotchRect
                 let screenWidth = geometry.screenRect.width
                 // Pill mode needs larger padding since the pill width is content-driven
-                let padX: CGFloat = geometry.isPillMode ? 60 : 10
+                let padX: CGFloat = 60
                 let padY: CGFloat = geometry.isPillMode ? 8 : 5
                 return CGRect(
                     x: (screenWidth - notchRect.width) / 2 - padX,
