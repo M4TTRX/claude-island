@@ -301,6 +301,12 @@ struct InstanceRow: View {
                             }
                         default:
                             if let msg = self.session.lastMessage {
+                                Text(msg)
+                                    .font(.system(size: 11))
+                                    .foregroundColor(.white.opacity(0.4))
+                                    .lineLimit(1)
+                            }
+                        }
                     } else if let lastMsg = self.session.lastMessage {
                         Text(lastMsg)
                             .font(.system(size: 11))
@@ -449,11 +455,6 @@ struct InlineApprovalButtons: View {
         }
     }
 
-    // MARK: Private
-
-
-    @State private var showDenyButton = false
-    @State private var showAllowButton = false
 }
 
 // MARK: - IconButton

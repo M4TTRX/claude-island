@@ -62,23 +62,23 @@ nonisolated struct PermissionContext: Sendable {
 
         // For Bash, extract the command
         if toolName == "Bash" || toolName == "BashOutput" {
-            if let cmd = input["command"]?.value as? String {
+            if let cmd = input["command"]?.stringValue {
                 return cmd
             }
         }
 
         // For file tools, show the path or pattern
-        if let path = input["file_path"]?.value as? String {
+        if let path = input["file_path"]?.stringValue {
             return path
         }
-        if let pattern = input["pattern"]?.value as? String {
+        if let pattern = input["pattern"]?.stringValue {
             return pattern
         }
 
         // For other tools, show full input without truncation
         var parts: [String] = []
         for (key, value) in input {
-            if let str = value.value as? String {
+            if let str = value.stringValue {
                 parts.append("\(key): \(str)")
             }
         }
@@ -90,29 +90,32 @@ nonisolated struct PermissionContext: Sendable {
         guard toolName == "AskUserQuestion" || toolName.contains("AskUserQuestion"),
               let input = toolInput,
               let questionsValue = input["questions"],
-              let questionsArray = questionsValue.value as? [Any] else {
+              case let .array(questionsArray) = questionsValue else {
             return nil
         }
 
         let items = questionsArray.compactMap { item -> QuestionItem? in
-            guard let dict = item as? [String: Any],
-                  let question = dict["question"] as? String else { return nil }
+            guard case let .object(dict) = item,
+                  let question = dict["question"]?.stringValue else { return nil }
 
             var options: [QuestionOption] = []
-            if let optionsArray = dict["options"] as? [[String: Any]] {
-                // Object format: [{label: "X", description: "Y"}, ...]
+            if case let .array(optionsArray)? = dict["options"] {
                 options = optionsArray.compactMap { opt -> QuestionOption? in
-                    guard let label = opt["label"] as? String else { return nil }
-                    return QuestionOption(label: label, description: opt["description"] as? String)
+                    if case let .object(optDict) = opt {
+                        // Object format: {label: "X", description: "Y"}
+                        guard let label = optDict["label"]?.stringValue else { return nil }
+                        return QuestionOption(label: label, description: optDict["description"]?.stringValue)
+                    } else if let label = opt.stringValue {
+                        // Simple string format
+                        return QuestionOption(label: label, description: nil)
+                    }
+                    return nil
                 }
-            } else if let optionStrings = dict["options"] as? [String] {
-                // Simple string array: ["X", "Y", ...]
-                options = optionStrings.map { QuestionOption(label: $0, description: nil) }
             }
 
             return QuestionItem(
                 question: question,
-                header: dict["header"] as? String,
+                header: dict["header"]?.stringValue,
                 options: options
             )
         }

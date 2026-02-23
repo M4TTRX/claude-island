@@ -301,7 +301,7 @@ nonisolated enum ToolInProgressPhase: Equatable, Sendable {
 // MARK: - Queued Prompt
 
 /// A prompt submitted while Claude is processing, not yet visible in JSONL
-struct QueuedPrompt: Equatable, Sendable, Identifiable {
+nonisolated struct QueuedPrompt: Equatable, Sendable, Identifiable {
     let id: String
     let text: String
     let timestamp: Date

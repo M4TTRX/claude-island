@@ -475,7 +475,7 @@ struct NotchView: View {
 
     // MARK: - Header Row (persists across states)
 
-    private var headerRow: some View {
+    @ViewBuilder private var headerRow: some View {
         if isPillMode && viewModel.status != .opened {
             // Pill mode: compact status line sized to content
             pillClosedRow

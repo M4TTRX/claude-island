@@ -227,6 +227,7 @@ nonisolated extension SessionEvent {
              let .permissionDenied(sessionID, _, _),
              let .permissionSocketFailed(sessionID, _),
              let .interruptDetected(sessionID),
+             let .promptQueued(sessionID, _),
              let .clearDetected(sessionID),
              let .sessionEnded(sessionID),
              let .loadHistory(sessionID, _),

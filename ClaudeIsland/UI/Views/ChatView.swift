@@ -544,17 +544,6 @@ struct ChatView: View {
         ))
     }
 
-    // MARK: - Approval Bar
-
-    private func approvalBar(tool: String) -> some View {
-        ChatApprovalBar(
-            tool: tool,
-            toolInput: self.session.pendingToolInput,
-            onApprove: { self.approvePermission() },
-            onDeny: { self.denyPermission() },
-        )
-    }
-
     // MARK: - Question Bar
 
     private func questionBar(questions: [QuestionItem]) -> some View {
