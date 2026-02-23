@@ -144,8 +144,8 @@ struct NotchView: View {
         ZStack(alignment: .top) {
             // Outer container does NOT receive hits - only the notch content does
             VStack(spacing: 0) {
-                // In pill mode, center the pill vertically within the menu bar
-                if isPillMode && viewModel.status != .opened {
+                // In pill mode, add top padding to keep the pill/panel below the screen edge
+                if isPillMode {
                     let padding = max(1, (viewModel.menuBarHeight - closedNotchSize.height) / 2)
                     Spacer().frame(height: padding)
                 }
