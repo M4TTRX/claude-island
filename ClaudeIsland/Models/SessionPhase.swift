@@ -103,7 +103,8 @@ struct PermissionContext: Sendable {
             return QuestionItem(
                 question: question,
                 header: dict["header"] as? String,
-                options: options
+                options: options,
+                multiSelect: dict["multiSelect"] as? Bool ?? false
             )
         }
 

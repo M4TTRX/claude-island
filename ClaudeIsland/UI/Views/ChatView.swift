@@ -70,7 +70,7 @@ struct ChatView: View {
                 // Approval bar, interactive prompt, or Input bar
                 if let tool = approvalTool {
                     if tool == "AskUserQuestion" || tool.contains("AskUserQuestion") {
-                        if let questions = session.pendingQuestions, !questions.isEmpty, session.isInTmux {
+                        if let questions = session.pendingQuestions, !questions.isEmpty {
                             // Interactive answering with parsed question data
                             questionBar(questions: questions)
                                 .transition(.asymmetric(
@@ -450,6 +450,12 @@ struct ChatView: View {
             onSubmitText: { _, text in
                 answerQuestionWithText(text, questions: questions)
             },
+            onSubmitAllAnswers: { answers in
+                submitAllAnswers(answers)
+            },
+            onCancel: {
+                denyPermission()
+            },
             onGoToTerminal: { focusTerminal() }
         )
     }
@@ -505,6 +511,29 @@ struct ChatView: View {
             try? await Task.sleep(for: .milliseconds(500))
             if let target = await findTmuxTarget(tty: tty) {
                 _ = await ToolApprovalHandler.shared.selectOption(at: optionIndex, to: target)
+            }
+        }
+    }
+
+    /// Submit all answers from the multi-question wizard.
+    /// Approves the permission then batch-sends tmux keystrokes for all answers.
+    private func submitAllAnswers(_ answers: [(questionIndex: Int, selectedIndices: Set<Int>, isMultiSelect: Bool)]) {
+        guard session.isInTmux, let tty = session.tty else { return }
+
+        resumeAutoscroll()
+        shouldScrollToBottom = true
+
+        // Allow the tool through the hook (unblocks the permission request)
+        sessionMonitor.approvePermission(sessionId: sessionId)
+
+        // After a delay, batch-send tmux keystrokes for all answers
+        Task {
+            try? await Task.sleep(for: .milliseconds(500))
+            if let target = await findTmuxTarget(tty: tty) {
+                _ = await ToolApprovalHandler.shared.selectMultipleAnswers(
+                    answers: answers,
+                    to: target
+                )
             }
         }
     }
