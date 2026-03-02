@@ -836,7 +836,8 @@ actor ConversationParser {
                 return QuestionItem(
                     question: question,
                     header: q["header"] as? String,
-                    options: options
+                    options: options,
+                    multiSelect: q["multiSelect"] as? Bool ?? false
                 )
             }
         }
